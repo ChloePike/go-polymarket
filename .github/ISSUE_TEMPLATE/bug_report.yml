@@ -1,0 +1,80 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 ChloePike
+
+name: Bug report
+description: This client does something other than what the API says it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Never paste a private key, an API secret, or a passphrase. If you
+        include an error body, redact the `POLY-API-KEY` and
+        `POLY-SIGNATURE` headers first.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: >-
+        What the client did, and what the API or the documentation says it
+        should have done instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce it
+      description: >-
+        The smallest program that shows it. A `main.go` someone can run beats
+        a description of one.
+      render: go
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: >-
+        The module version, or the commit. `go list -m
+        github.com/ChloePike/go-polymarket` prints it.
+      placeholder: v0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: go-version
+    attributes:
+      label: Go version and platform
+      description: The first line of `go version`.
+      placeholder: go version go1.24.0 darwin/arm64
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which surface
+      options:
+        - CLOB — order book, trading, rewards
+        - Gamma — markets, events, tags, comments
+        - Data — positions, trades, portfolio value
+        - Websocket — market, user or live-data stream
+        - Signing — orders, EIP-712, level-1 or level-2 auth
+        - Money — prices, sizes, amounts, fees
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: response
+    attributes:
+      label: What the server said
+      description: >-
+        The status code and body, if the request reached one. Redact the auth
+        headers.
+      render: text
+    validations:
+      required: false

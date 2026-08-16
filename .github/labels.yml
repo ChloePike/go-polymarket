@@ -1,0 +1,106 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 ChloePike
+
+# The labels this repository uses. This file is the source of truth; GitHub is
+# a copy of it. To apply it:
+#
+#     .github/sync-labels.sh
+#
+# Four families, and a label belongs to exactly one of them:
+#
+#   type      what kind of change this is. Every issue gets one.
+#   area      which surface it touches. Add as many as apply.
+#   risk      what it costs to get wrong. Only three things carry one.
+#   state     why it is not being worked on.
+
+# --- type -------------------------------------------------------------------
+
+- name: bug
+  color: d73a4a
+  description: This client does something other than what the API says
+
+- name: enhancement
+  color: a2eeef
+  description: An endpoint or behaviour that is missing
+
+- name: documentation
+  color: 0075ca
+  description: The docs are wrong, unclear, or absent
+
+- name: question
+  color: d876e3
+  description: Further information is requested
+
+# --- area -------------------------------------------------------------------
+
+- name: "area: clob"
+  color: 1d76db
+  description: Order book, trading, rewards, builder attribution
+
+- name: "area: gamma"
+  color: 1d76db
+  description: Markets, events, series, tags, comments, search
+
+- name: "area: data"
+  color: 1d76db
+  description: Positions, trades, holders, portfolio value
+
+- name: "area: ws"
+  color: 1d76db
+  description: The market, user and live-data streams
+
+- name: "area: signing"
+  color: 1d76db
+  description: EIP-712, order digests, level-1 and level-2 auth
+
+- name: "area: money"
+  color: 1d76db
+  description: Prices, sizes, amounts, rounding, fees
+
+- name: "area: transport"
+  color: 1d76db
+  description: Session, retries, rate limiting, errors
+
+# --- risk -------------------------------------------------------------------
+
+- name: "moves money"
+  color: b60205
+  description: Gets this wrong and somebody loses funds. Review adversarially
+
+- name: "needs golden vector"
+  color: e99695
+  description: Signing or amount math changed and no vector covers it yet
+
+- name: "breaking change"
+  color: d93f0b
+  description: Callers must edit their code to take this
+
+# --- state ------------------------------------------------------------------
+
+- name: "needs live check"
+  color: fbca04
+  description: Cannot be settled from the docs; someone must run it
+
+- name: upstream
+  color: 5319e7
+  description: Polymarket's behaviour, not this client's
+
+- name: "good first issue"
+  color: 7057ff
+  description: Small, self-contained, and the surrounding code is settled
+
+- name: "help wanted"
+  color: 008672
+  description: Wanted, and nobody is working on it
+
+- name: duplicate
+  color: cfd3d7
+  description: This issue or pull request already exists
+
+- name: invalid
+  color: e4e669
+  description: Not reproducible, or not about this client
+
+- name: wontfix
+  color: ffffff
+  description: Deliberate. The reason is in the thread

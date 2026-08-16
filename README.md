@@ -159,6 +159,15 @@ returned signature recovers to the signing address before sending it.
   limits, book drift, why a timed-out write must never be resubmitted.
 - **[DESIGN.md](DESIGN.md)** — protocol reference and the traps worth knowing.
 
+## Contributing
+
+Patches are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) has the four gates a
+change has to pass and the four rules that are not style — named structs, no
+`float64` for money, clean-room, and golden vectors for anything that signs.
+
+Found something in the signing path? [SECURITY.md](SECURITY.md) — report it
+privately, not as an issue.
+
 ## License
 
 GPL-3.0-or-later — see [LICENSE](LICENSE).

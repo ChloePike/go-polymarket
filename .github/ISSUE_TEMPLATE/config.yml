@@ -1,0 +1,23 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 ChloePike
+
+blank_issues_enabled: false
+contact_links:
+  - name: A question about using the library
+    url: https://github.com/ChloePike/go-polymarket/discussions
+    about: >-
+      How do I place a GTD order, why is my level-2 request returning 401,
+      what does this field mean. Ask here rather than opening a bug.
+
+  - name: A question about Polymarket itself
+    url: https://docs.polymarket.com
+    about: >-
+      Fees, market resolution, account funding and anything the exchange
+      decides are upstream of this client. This repository only wraps the
+      API.
+
+  - name: A security problem
+    url: https://github.com/ChloePike/go-polymarket/security/advisories/new
+    about: >-
+      Anything touching keys, signatures or money. Report it privately, not
+      as a public issue.

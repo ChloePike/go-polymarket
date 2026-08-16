@@ -43,6 +43,39 @@ jobs:
       - name: test
         run: go test -race ./...
 
+  # A squashed pull request takes its title as the commit subject, so the
+  # title is held to what a commit message is held to. See CONTRIBUTING.md.
+  pr-title:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: check the conventional-commit prefix
+        # Through the environment, never interpolated into the script: a
+        # title is attacker-controlled text on a public repository.
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pattern='^(feat|fix|docs|refactor|test|chore|perf)(\([a-z0-9/._-]+\))?!?: [a-z].{4,}[^.]$'
+          if printf '%s' "$TITLE" | grep -qE "$pattern"; then
+            exit 0
+          fi
+          cat >&2 <<MESSAGE
+          this title cannot be a commit subject:
+
+              $TITLE
+
+          it wants a conventional-commit prefix, then what changes, in the
+          imperative and in lower case, with no full stop:
+
+              feat: pace requests against the published rate limits
+              fix: make a rate-limit refund land on its own slot
+              docs: say why writes are never retried
+
+          prefixes: feat fix docs refactor test chore perf
+          add ! before the colon for a change that breaks callers.
+          MESSAGE
+          exit 1
+
   # A guard for the rule that costs the most when it slips: every struct type
   # is declared and named, so a response shape is never written inline where
   # nobody else can decode it.

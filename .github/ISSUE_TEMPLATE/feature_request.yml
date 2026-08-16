@@ -1,0 +1,48 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 ChloePike
+
+name: Missing endpoint or feature
+description: An API this client does not reach yet, or something it cannot do.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What is missing
+      description: >-
+        The endpoint, the field, or the behaviour. If it is an endpoint, the
+        method and path — `GET /markets/{id}/tags` — are enough to start.
+    validations:
+      required: true
+
+  - type: input
+    id: docs
+    attributes:
+      label: Where it is documented
+      description: >-
+        A link to the Polymarket documentation, or to the official client that
+        implements it. An undocumented endpoint is still worth reporting; say
+        so here and how you found it.
+      placeholder: https://docs.polymarket.com/api-reference/...
+    validations:
+      required: false
+
+  - type: textarea
+    id: use
+    attributes:
+      label: What you would do with it
+      description: >-
+        This decides the shape of the Go API more than the endpoint does. A
+        thing called once at start-up and a thing called per quote want
+        different signatures.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: money
+    attributes:
+      label: Does it move money
+      options:
+        - label: >-
+            This would sign something, spend a balance, or place or cancel an
+            order.
