@@ -278,9 +278,16 @@ func (l *StandardLimiter) Wait(ctx context.Context, r Request) error {
 
 	idx, ok := l.match(r.Method, r.Path)
 	var win *slidingWindow
+	// slot names the reservation the window handed out, which is what must be
+	// given back on cancellation. Naming it is not a convenience: the trading
+	// bucket below may push the send past the window's own time, so a refund
+	// described by when would be asking the window to give back a slot it
+	// never issued.
+	var slot windowReservation
 	if ok {
 		win = l.windowFor(idx)
-		if t := win.reserve(now); t.After(when) {
+		var t time.Time
+		if t, slot = win.reserve(now); t.After(when) {
 			when = t
 		}
 	}
@@ -304,7 +311,7 @@ func (l *StandardLimiter) Wait(ctx context.Context, r Request) error {
 		// nothing ever used.
 		l.mu.Lock()
 		if win != nil {
-			win.release(when)
+			win.release(slot)
 		}
 		if bucket != nil {
 			bucket.release(float64(cost))
@@ -353,22 +360,53 @@ func (l *StandardLimiter) Observe(r Request, statusCode int, header http.Header)
 	}
 }
 
-// retryAfter reads whichever delay header the response carried.
+// maxFreeze is the longest a response header may hold this client back.
+//
+// The deadline in a refusal is somebody else's arithmetic. A server that is
+// broken, hostile, or merely counting from an epoch this client does not
+// share can name an instant centuries away — a Retry-After of a few billion
+// seconds, a Poly-RateLimit-Reset that is milliseconds rather than seconds —
+// and every request after it waits until the process is restarted. Honouring
+// the cap instead costs a handful of refusals an hour, which is nothing.
+// Waiting longer than this is a decision for the caller and its context, not
+// for a header.
+const maxFreeze = 5 * time.Minute
+
+// retryAfter reads whichever delay header the response carried, bounded by
+// maxFreeze.
 func (l *StandardLimiter) retryAfter(header http.Header) (time.Time, bool) {
+	now := l.now()
 	if v := header.Get("Retry-After"); v != "" {
-		if secs, err := strconv.Atoi(v); err == nil && secs >= 0 {
-			return l.now().Add(time.Duration(secs) * time.Second), true
+		if secs, err := strconv.ParseInt(v, 10, 64); err == nil && secs >= 0 {
+			// Compared before multiplying: seconds enough to overflow a
+			// Duration would otherwise wrap to a deadline in the past and
+			// silently cancel the backoff. Sixty-four bits whatever the
+			// platform's int is, so the same header means the same thing
+			// everywhere.
+			d := maxFreeze
+			if secs < int64(maxFreeze/time.Second) {
+				d = time.Duration(secs) * time.Second
+			}
+			return now.Add(d), true
 		}
 		if t, err := http.ParseTime(v); err == nil {
-			return t, true
+			return clampFreeze(now, t), true
 		}
 	}
 	if v := header.Get("Poly-RateLimit-Reset"); v != "" {
 		if unix, err := strconv.ParseInt(v, 10, 64); err == nil {
-			return time.Unix(unix, 0), true
+			return clampFreeze(now, time.Unix(unix, 0)), true
 		}
 	}
 	return time.Time{}, false
+}
+
+// clampFreeze bounds a deadline the server named. See maxFreeze.
+func clampFreeze(now, until time.Time) time.Time {
+	if latest := now.Add(maxFreeze); until.After(latest) {
+		return latest
+	}
+	return until
 }
 
 // match returns the index of the most specific rule for a request. The
@@ -421,14 +459,41 @@ func (l *StandardLimiter) bucketFor(method, path string) *tokenBucketState {
 	return nil
 }
 
+// A windowSlot is one remembered send: the instant it is scheduled for, and
+// the number of the reservation holding it. A zero when is a free slot.
+type windowSlot struct {
+	when time.Time
+	seq  uint64
+}
+
+// A windowReservation is one request's claim on a slot, kept so that a request
+// that never goes can put the window back exactly as it found it.
+//
+// It names the slot rather than the instant because two reservations may
+// legitimately be scheduled for the same instant — several requests behind one
+// freeze all share its deadline — so a time does not identify a claim. It
+// carries the slot's previous contents rather than merely blanking on release
+// because a claim may have displaced a send that is still inside the window,
+// and forgetting that send admits one request too many. And seq settles the
+// case where the slot has since been claimed again: the refund is dropped,
+// because the new claim's time is never earlier than what would be restored.
+type windowReservation struct {
+	slot int
+	seq  uint64
+	prev windowSlot
+}
+
 // A slidingWindow admits at most Requests sends in any Window, by remembering
-// when the last Requests sends were scheduled for. Reserving takes the next
-// free slot, which may be in the future.
+// when the last Requests sends were scheduled for. Reserving takes a free
+// slot, or displaces the oldest send and queues behind it.
 type slidingWindow struct {
 	limit RateLimit
-	// slots is a ring of scheduled send times, oldest at next.
-	slots      []time.Time
-	next       int
+	// slots is an unordered set of scheduled send times. Position carries no
+	// meaning, which is what lets an abandoned request hand its own slot back
+	// without disturbing any other. Finding the oldest costs a scan of
+	// Requests entries, which is nothing beside the network call it paces.
+	slots      []windowSlot
+	seq        uint64
 	frozenTill time.Time
 }
 
@@ -436,13 +501,27 @@ func newSlidingWindow(limit RateLimit) *slidingWindow {
 	if limit.Requests < 1 {
 		limit.Requests = 1
 	}
-	return &slidingWindow{limit: limit, slots: make([]time.Time, limit.Requests)}
+	return &slidingWindow{limit: limit, slots: make([]windowSlot, limit.Requests)}
 }
 
-// reserve claims the next slot and returns when it may be used.
-func (w *slidingWindow) reserve(now time.Time) time.Time {
+// reserve claims a slot and returns when it may be used, along with the claim
+// itself so that an abandoned request can give it back.
+func (w *slidingWindow) reserve(now time.Time) (time.Time, windowReservation) {
+	// A free slot means the window has room. Otherwise the oldest send is the
+	// first to leave the window, so it is the one to queue behind.
+	at := 0
+	for i, s := range w.slots {
+		if s.when.IsZero() {
+			at = i
+			break
+		}
+		if s.when.Before(w.slots[at].when) {
+			at = i
+		}
+	}
+
 	when := now
-	if oldest := w.slots[w.next]; !oldest.IsZero() {
+	if oldest := w.slots[at].when; !oldest.IsZero() {
 		if t := oldest.Add(w.limit.Window); t.After(when) {
 			when = t
 		}
@@ -450,21 +529,22 @@ func (w *slidingWindow) reserve(now time.Time) time.Time {
 	if w.frozenTill.After(when) {
 		when = w.frozenTill
 	}
-	w.slots[w.next] = when
-	w.next = (w.next + 1) % len(w.slots)
-	return when
+
+	w.seq++
+	res := windowReservation{slot: at, seq: w.seq, prev: w.slots[at]}
+	w.slots[at] = windowSlot{when: when, seq: w.seq}
+	return when, res
 }
 
-// release gives back a slot whose request was abandoned. Zeroing it makes it
-// stop delaying anything once it rotates to the front, which is exactly the
-// effect of a send that never happened.
-func (w *slidingWindow) release(when time.Time) {
-	for i, t := range w.slots {
-		if t.Equal(when) {
-			w.slots[i] = time.Time{}
-			return
-		}
+// release gives a slot back after its request was abandoned, restoring
+// whatever the claim displaced. That is exactly the effect of a send that
+// never happened: the window forgets the request, and remembers again the
+// older one it had been queueing behind.
+func (w *slidingWindow) release(res windowReservation) {
+	if res.seq == 0 || w.slots[res.slot].seq != res.seq {
+		return
 	}
+	w.slots[res.slot] = res.prev
 }
 
 // freeze holds the window shut until t, after a refusal.
@@ -529,8 +609,19 @@ func (b *tokenBucketState) release(cost float64) {
 // adopt takes the exchange's own count of remaining tokens, which is
 // authoritative: it accounts for other processes using the same signer, for
 // costs this client cannot predict, and for clock drift.
+//
+// Authoritative is not the same as unchecked. A balance of NaN would be
+// permanent: it survives every later refill, and it compares false against
+// every cost, so the bucket would admit everything for the life of the
+// process. A balance of minus infinity, or merely an absurd one, would put
+// the next order centuries out. The deepest hole worth believing is one
+// burst, which the tier's own rate refills in a bounded time.
 func (b *tokenBucketState) adopt(remaining float64, now time.Time) {
-	b.tokens = math.Min(float64(b.bucket.Burst), remaining)
+	if math.IsNaN(remaining) {
+		return
+	}
+	burst := float64(b.bucket.Burst)
+	b.tokens = math.Min(burst, math.Max(-burst, remaining))
 	b.updated = now
 }
 
