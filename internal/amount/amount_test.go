@@ -9,28 +9,37 @@ import (
 	"testing"
 )
 
+// goldenLimit is one limit-order amount the official SDK produced.
+type goldenLimit struct {
+	Side        string `json:"side"`
+	Price       string `json:"price"`
+	Size        string `json:"size"`
+	TickSize    string `json:"tickSize"`
+	MakerAmount string `json:"makerAmount"`
+	TakerAmount string `json:"takerAmount"`
+}
+
+// goldenMarket is one market-order amount the official SDK produced.
+type goldenMarket struct {
+	Side        string `json:"side"`
+	Amount      string `json:"amount"`
+	Price       string `json:"price"`
+	TickSize    string `json:"tickSize"`
+	MakerAmount string `json:"makerAmount"`
+	TakerAmount string `json:"takerAmount"`
+}
+
+// goldenConfig is the SDK's rounding table for one tick size.
+type goldenConfig struct {
+	Price  int `json:"price"`
+	Size   int `json:"size"`
+	Amount int `json:"amount"`
+}
+
 type goldenAmounts struct {
-	Amounts []struct {
-		Side        string `json:"side"`
-		Price       string `json:"price"`
-		Size        string `json:"size"`
-		TickSize    string `json:"tickSize"`
-		MakerAmount string `json:"makerAmount"`
-		TakerAmount string `json:"takerAmount"`
-	} `json:"amounts"`
-	MarketOrders []struct {
-		Side        string `json:"side"`
-		Amount      string `json:"amount"`
-		Price       string `json:"price"`
-		TickSize    string `json:"tickSize"`
-		MakerAmount string `json:"makerAmount"`
-		TakerAmount string `json:"takerAmount"`
-	} `json:"marketOrders"`
-	RoundingConfig map[string]struct {
-		Price  int `json:"price"`
-		Size   int `json:"size"`
-		Amount int `json:"amount"`
-	} `json:"roundingConfig"`
+	Amounts        []goldenLimit           `json:"amounts"`
+	MarketOrders   []goldenMarket          `json:"marketOrders"`
+	RoundingConfig map[string]goldenConfig `json:"roundingConfig"`
 }
 
 func load(t *testing.T) goldenAmounts {

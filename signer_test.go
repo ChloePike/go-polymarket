@@ -24,16 +24,20 @@ func TestPrivateKeyAddress(t *testing.T) {
 	}
 }
 
+// badKeyCase is one private key NewPrivateKey must reject.
+type badKeyCase struct {
+	name string
+	key  string
+}
+
 func TestPrivateKeyErrors(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		key  string
-	}{
+	cases := []badKeyCase{
 		{"empty", ""},
 		{"short", "0xac09"},
 		{"not hex", "0xzzzz974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff8"},
 		{"zero", "0x0000000000000000000000000000000000000000000000000000000000000000"},
-	} {
+	}
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := NewPrivateKey(tc.key); err == nil {
 				t.Fatal("got nil error")
@@ -73,12 +77,18 @@ func TestSignDigest(t *testing.T) {
 	}
 }
 
+// checksumCase is one address and its EIP-55 form.
+type checksumCase struct {
+	in   string
+	want string
+}
+
 func TestChecksumAddress(t *testing.T) {
 	// Expected values are what viem, ethers and go-ethereum all produce. Note
 	// that EIP-55's own text prints the fourth one as "...D1220a0c...", which
 	// no implementation agrees with; the checksum is the authority, not the
 	// prose.
-	for _, tc := range []struct{ in, want string }{
+	cases := []checksumCase{
 		{"0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed", "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"},
 		{"0xfb6916095ca1df60bb79ce92ce3ea74c37c5d359", "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359"},
 		{"0xdbf03b407c01e7cd3cbea99509d93f8dddc8c6fb", "0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB"},
@@ -93,7 +103,8 @@ func TestChecksumAddress(t *testing.T) {
 		{"not an address", "not an address"},
 		{"0x", "0x"},
 		{"0xzzzzb6053f3e94c9b9a09f33669435e7ef1beaed", "0xzzzzb6053f3e94c9b9a09f33669435e7ef1beaed"},
-	} {
+	}
+	for _, tc := range cases {
 		if got := ChecksumAddress(tc.in); got != tc.want {
 			t.Errorf("ChecksumAddress(%q) = %q, want %q", tc.in, got, tc.want)
 		}

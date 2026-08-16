@@ -118,6 +118,70 @@ func StructHash(typeHash Word, fields ...Word) Word {
 	return Keccak256(buf)
 }
 
+// An Encoder accumulates a struct's fields in the order its type string
+// declares them, holding the first failure until the caller asks for the hash.
+// It exists so a field list reads as a field list instead of as eleven
+// repetitions of the same error check.
+//
+// The zero Encoder is ready to use.
+type Encoder struct {
+	words []Word
+	err   error
+}
+
+// Uint appends a uint256 field given as a decimal string.
+func (e *Encoder) Uint(name, decimal string) {
+	w, err := UintString(decimal)
+	e.append(name, w, err)
+}
+
+// Uint8 appends a uint8 field.
+func (e *Encoder) Uint8(name string, v uint8) {
+	e.append(name, Uint8(v), nil)
+}
+
+// Uint256 appends a uint256 field given as an integer.
+func (e *Encoder) Uint256(name string, v *big.Int) {
+	w, err := Uint(v)
+	e.append(name, w, err)
+}
+
+// Address appends an address field.
+func (e *Encoder) Address(name, address string) {
+	w, err := Address(address)
+	e.append(name, w, err)
+}
+
+// Bytes32 appends a bytes32 field, which is carried verbatim.
+func (e *Encoder) Bytes32(name, value string) {
+	w, err := Bytes32(value)
+	e.append(name, w, err)
+}
+
+// String appends a string field, which EIP-712 hashes rather than pads.
+func (e *Encoder) String(name, value string) {
+	e.append(name, String(value), nil)
+}
+
+func (e *Encoder) append(name string, w Word, err error) {
+	if err != nil {
+		if e.err == nil {
+			e.err = fmt.Errorf("field %s: %w", name, err)
+		}
+		return
+	}
+	e.words = append(e.words, w)
+}
+
+// StructHash returns hashStruct over the accumulated fields, or the first
+// error a field encoding produced.
+func (e *Encoder) StructHash(typeHash Word) (Word, error) {
+	if e.err != nil {
+		return Word{}, e.err
+	}
+	return StructHash(typeHash, e.words...), nil
+}
+
 // A Domain is an EIP-712 domain. An empty VerifyingContract means the domain
 // omits that field entirely — the field is dropped from the type string, not
 // encoded as the zero address. Polymarket's ClobAuth domain relies on this.
