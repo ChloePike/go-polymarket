@@ -3,3 +3,6 @@
 *.out
 .env
 .DS_Store
+
+# Internal working spec, not for the public repository.
+CLAUDE.md
