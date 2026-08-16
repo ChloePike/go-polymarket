@@ -4,6 +4,7 @@
 package polymarket
 
 import (
+	"bytes"
 	"encoding/hex"
 	"testing"
 )
@@ -108,5 +109,35 @@ func TestChecksumAddress(t *testing.T) {
 		if got := ChecksumAddress(tc.in); got != tc.want {
 			t.Errorf("ChecksumAddress(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// A personalDigestCase is one message and the digest an EIP-191 personal
+// signature covers for it. The expected values come from viem's hashMessage,
+// the function the official relayer client's signer reaches.
+type personalDigestCase struct {
+	name    string
+	message []byte
+	want    string
+}
+
+// TestPersonalDigest pins the prefixed hash a Gnosis Safe transaction and a
+// proxy relay are signed over. It is not EIP-712, and hashing one as the other
+// produces a signature that recovers to nobody the contract expects.
+func TestPersonalDigest(t *testing.T) {
+	cases := []personalDigestCase{
+		{
+			name:    "a 32-byte digest, the only shape the relayer signs",
+			message: bytes.Repeat([]byte{0x11}, 32),
+			want:    "0x245a48de257ae28de2b11cb8fc02361fe87a20566dc63bec4492c3854b1aae52",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := PersonalDigest(tc.message)
+			if h := "0x" + hex.EncodeToString(got[:]); h != tc.want {
+				t.Errorf("PersonalDigest = %s, want %s", h, tc.want)
+			}
+		})
 	}
 }

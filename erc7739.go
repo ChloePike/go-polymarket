@@ -68,7 +68,7 @@ func WrappedOrderTypedData(o Order, chainID int64, opts OrderOptions) (TypedData
 	}
 	return TypedData{
 		Types: map[string][]TypedDataField{
-			"EIP712Domain":  inner.Domain.domainType(),
+			"EIP712Domain":  inner.Domain.DomainType(),
 			"TypedDataSign": cloneFields(typedDataSignFields),
 			"Order":         cloneFields(orderStructFields),
 		},

@@ -56,6 +56,34 @@ type TypedDataSigner interface {
 	SignTypedData(td TypedData) ([]byte, error)
 }
 
+// SignTypedData signs an EIP-712 payload with a Signer.
+//
+// It prefers a TypedDataSigner, so an external signer is shown the fields
+// rather than a hash, and checks that whatever comes back recovers to the
+// signing address.
+//
+// Use it for a payload this package does not build for you — a relayer
+// transaction, a permit, anything the API grows next.
+func SignTypedData(s Signer, td TypedData) ([]byte, error) {
+	if s == nil {
+		return nil, ErrNoSigner
+	}
+	return signTypedData(s, td)
+}
+
+// PersonalDigest returns the 32 bytes an eth_sign or personal_sign covers:
+//
+//	keccak256("\x19Ethereum Signed Message:\n" ‖ len(message) ‖ message)
+//
+// This is not EIP-712 and is not interchangeable with it. Two places in the
+// Polymarket protocol need it: a Gnosis Safe transaction, whose signature the
+// Safe re-prefixes before recovering it, and a proxy-wallet relay, whose hash
+// is not typed data at all. An order never uses it.
+func PersonalDigest(message []byte) [32]byte {
+	prefix := fmt.Sprintf("\x19Ethereum Signed Message:\n%d", len(message))
+	return eip712.Keccak256([]byte(prefix), message)
+}
+
 // signTypedData produces a signature over a payload, preferring a signer that
 // can see the payload and falling back to the digest.
 func signTypedData(s Signer, td TypedData) ([]byte, error) {

@@ -67,11 +67,13 @@ type TypedData struct {
 	Message     map[string]any              `json:"message"`
 }
 
-// domainType returns the EIP712Domain field list this domain actually has.
+// DomainType returns the EIP712Domain field list this domain actually has.
+//
 // A domain with no verifying contract has a three-field type string, and
 // hashing it as four fields with a zero address gives a different, wrong
-// separator.
-func (d TypedDataDomain) domainType() []TypedDataField {
+// separator. Use it when building a TypedData by hand, so that the declared
+// domain type and the domain agree.
+func (d TypedDataDomain) DomainType() []TypedDataField {
 	var fields []TypedDataField
 	if d.Name != "" {
 		fields = append(fields, TypedDataField{Name: "name", Type: "string"})
@@ -444,7 +446,7 @@ func OrderTypedData(o Order, chainID int64, opts OrderOptions) (TypedData, error
 	}
 	return TypedData{
 		Types: map[string][]TypedDataField{
-			"EIP712Domain": d.domainType(),
+			"EIP712Domain": d.DomainType(),
 			"Order":        cloneFields(orderStructFields),
 		},
 		PrimaryType: "Order",
@@ -513,7 +515,7 @@ func ClobAuthTypedData(address string, chainID int64, timestamp string, nonce in
 	}
 	return TypedData{
 		Types: map[string][]TypedDataField{
-			"EIP712Domain": d.domainType(),
+			"EIP712Domain": d.DomainType(),
 			"ClobAuth":     cloneFields(clobAuthStructFields),
 		},
 		PrimaryType: "ClobAuth",
