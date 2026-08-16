@@ -34,8 +34,13 @@ clob/                the order book and everything that needs a signature
   fees.go        the pre-trade fee estimate
 
 gamma/               market and event metadata, no authentication
+  client.go      Client, New, NewWithSession, the shared options
+  gamma.go       events and markets, and the stringified-array decoders
+  extra.go       series, tags, comments, search, profiles, sports
+
 data/                positions, activity, holders, no authentication
 ws/                  market, user and live-data streams
+ratelimit.go         the published limits for every host, and the pacing
 
 testdata/            golden vectors and the script that regenerates them
 examples/            runnable commands, read-only unless stated
@@ -242,14 +247,30 @@ Same inputs, identical bytes. That is the whole correctness story.
 | `internal/eip712` — Keccak, typed data, domains | done, golden-pinned |
 | `internal/amount` — exact amount math | done, 2556 golden points |
 | `signer.go` — keys, addresses, EIP-55 | done, golden-pinned |
-| `auth.go` — level 1 and level 2 | done, golden-pinned |
+| `typeddata.go` — the EIP-712 payload, `TypedDataSigner` | done, cross-checked against viem |
+| `auth.go` — level 1 and level 2 | done, verified against production |
 | `order.go` — build and sign, V1/V2/V3, limit and market | done, golden-pinned |
-| `client.go` — transport, errors, auth plumbing | done |
-| CLOB read and trade endpoints | in flight |
-| data API | in flight |
-| fee model | in flight |
-| Gamma | in flight |
-| websockets | in flight |
+| `session.go` — transport, retries, errors | done |
+| `ratelimit.go` — both published limiters | done |
+| `clob/` — 69 methods | done |
+| `gamma/` — 49 methods | done |
+| `data/` — 15 methods | done |
+| `ws/` — market, user, live data | done, live-verified |
+
+Not implemented, and deliberately so for now: the relayer
+(`https://relayer-v2.polymarket.com`) and the bridge
+(`https://bridge.polymarket.com`). Both hosts are real and their published
+rate limits are already in the table here, but they are on-chain-adjacent
+surfaces — gasless meta-transactions for a proxy or Safe wallet, and
+cross-chain funding — rather than parts of the order book. They need
+meta-transaction signing this client does not have.
+
+There is no public testnet. The official SDKs support chain 80002 (Amoy) with
+a full set of contract addresses, but no Polymarket-hosted Amoy CLOB exists:
+every candidate hostname resolves to nothing, the documentation never mentions
+a testnet, and the SDKs' own examples point `host` at `localhost:8080` with no
+public matching engine to run there. To test against something other than
+production, point `WithHost` and `ws.WithURL` at your own server.
 
 ## Remaining risk
 
