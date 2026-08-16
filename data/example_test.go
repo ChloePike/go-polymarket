@@ -26,8 +26,11 @@ func Example() {
 		slog.Error("fetching positions", "err", err)
 		return
 	}
+	// Size, AvgPrice and CurrentValue are json.Number: the exact decimal text
+	// the server sent. Print it as-is, or parse it with big.Rat — never via
+	// float64, which cannot hold every price the API quotes.
 	for _, p := range positions {
-		fmt.Printf("%.2f shares of %s at %.3f, worth %.2f\n",
+		fmt.Printf("%s shares of %s at %s, worth %s\n",
 			p.Size, p.Outcome, p.AvgPrice, p.CurrentValue)
 	}
 }

@@ -55,13 +55,14 @@ func TestMarketTranscription(t *testing.T) {
 	if m.ConditionID != "0xa467b14d51f01b957109d9cbb1d6c124fab2a089d52ed8f471d23c2812e743b7" {
 		t.Errorf("ConditionID = %q", m.ConditionID)
 	}
-	// Liquidity is a decimal STRING on Market; LiquidityNum is the same value
-	// as a number. Both must decode, into different Go types.
+	// Liquidity is a quoted decimal STRING on Market; LiquidityNum is the
+	// same value as a bare JSON number. Both must decode, into different Go
+	// types, and both keep the server's digits exactly.
 	if m.Liquidity != "237253.02375" {
 		t.Errorf("Liquidity = %q, want the decimal string", m.Liquidity)
 	}
-	if m.LiquidityNum != 237253.02375 {
-		t.Errorf("LiquidityNum = %v, want 237253.02375", m.LiquidityNum)
+	if m.LiquidityNum != json.Number("237253.02375") {
+		t.Errorf("LiquidityNum = %q, want 237253.02375", m.LiquidityNum)
 	}
 	if m.ComboStatus != ComboStatusPending {
 		t.Errorf("ComboStatus = %q, want %q", m.ComboStatus, ComboStatusPending)
@@ -78,11 +79,31 @@ func TestMarketTranscription(t *testing.T) {
 	if len(m.PositionIDs) != 2 {
 		t.Errorf("len(PositionIDs) = %d, want 2 (native array, not stringified)", len(m.PositionIDs))
 	}
-	if len(m.ClobRewards) != 1 || m.ClobRewards[0].RewardsDailyRate != 10 {
+	if len(m.ClobRewards) != 1 || m.ClobRewards[0].RewardsDailyRate != json.Number("10") {
 		t.Errorf("ClobRewards = %+v, want one entry with RewardsDailyRate 10", m.ClobRewards)
 	}
+	// Rate is the fee curve and stays float64; RebateRate is an ordinary
+	// rate over money and keeps the server's text.
 	if m.FeeSchedule.Rate != 0.04 || !m.FeeSchedule.TakerOnly {
 		t.Errorf("FeeSchedule = %+v", m.FeeSchedule)
+	}
+	if m.FeeSchedule.RebateRate != json.Number("0.25") {
+		t.Errorf("FeeSchedule.RebateRate = %q, want 0.25", m.FeeSchedule.RebateRate)
+	}
+	// A price the wire sends with more digits than a float64 holds must
+	// survive as text: 0.045 is 0.0450000000000000011102230246251565 in
+	// float64.
+	if m.BestBid != json.Number("0.045") || m.LastTradePrice != json.Number("0.045") {
+		t.Errorf("BestBid/LastTradePrice = %q/%q, want 0.045/0.045", m.BestBid, m.LastTradePrice)
+	}
+	// An integer on the wire decodes to its literal text, without a
+	// synthesized decimal point.
+	if m.OrderMinSize != json.Number("5") || m.RewardsMinSize != json.Number("200") {
+		t.Errorf("OrderMinSize/RewardsMinSize = %q/%q, want 5/200", m.OrderMinSize, m.RewardsMinSize)
+	}
+	// Competitive is a ranking score, not an amount, and stays float64.
+	if m.Competitive != 0.8287955052762158 {
+		t.Errorf("Competitive = %v, want 0.8287955052762158", m.Competitive)
 	}
 
 	outcomes, err := m.DecodeOutcomes()
@@ -126,13 +147,14 @@ func TestEventTranscription(t *testing.T) {
 	if e.ID != "2890" {
 		t.Errorf("ID = %q, want 2890", e.ID)
 	}
-	// Event.Liquidity and Event.Volume are numbers; Market's same-named
-	// fields are decimal strings — see Event's doc comment.
-	if e.Liquidity != 0 {
-		t.Errorf("Liquidity = %v, want 0", e.Liquidity)
+	// Event.Liquidity and Event.Volume are bare JSON numbers; Market's
+	// same-named fields are quoted decimal strings — see Event's doc
+	// comment. A json.Number keeps either form's digits as sent.
+	if e.Liquidity != json.Number("0") {
+		t.Errorf("Liquidity = %q, want 0", e.Liquidity)
 	}
-	if e.Volume != 1335.05 {
-		t.Errorf("Volume = %v, want 1335.05", e.Volume)
+	if e.Volume != json.Number("1335.05") {
+		t.Errorf("Volume = %q, want 1335.05", e.Volume)
 	}
 	if e.PublishedAt != "2022-07-27 14:40:02.064+00" {
 		t.Errorf("PublishedAt = %q, want the raw non-RFC3339 wire value", e.PublishedAt)
@@ -156,9 +178,9 @@ func TestEventTranscription(t *testing.T) {
 	if len(e.Series) != 1 {
 		t.Fatalf("len(Series) = %d, want 1", len(e.Series))
 	}
-	// Series.CreatedBy and Series.Competitive are strings, unlike the
-	// same-named fields on Market/Event (int64/string and float64) — see
-	// Series' doc comment.
+	// Series.CreatedBy and Series.Competitive are quoted strings on the
+	// wire, unlike the same-named fields on Market/Event (int64/string and
+	// float64) — see Series' doc comment.
 	if e.Series[0].CreatedBy != "15" {
 		t.Errorf("Series[0].CreatedBy = %q, want the string \"15\"", e.Series[0].CreatedBy)
 	}
@@ -316,6 +338,82 @@ func TestSetMarketFilterArraysAndBools(t *testing.T) {
 		"tag_id":         {"1", "2", "3"},
 	}
 	checkQuery(t, q, want)
+}
+
+// TestNumericBoundsKeepCallerText pins that a money bound reaches the query
+// as the caller wrote it. A bound carried in binary floating point does not:
+// 0.070000000000000007 collapses to 0.07, and 1e8 is rewritten to 100000000,
+// so the threshold the server filters on is not the one the caller asked for.
+func TestNumericBoundsKeepCallerText(t *testing.T) {
+	qe := url.Values{}
+	setEventFilter(qe, EventFilter{
+		LiquidityMin: "1000.1",
+		LiquidityMax: "123456789.12345678",
+		VolumeMin:    "0.29",
+		VolumeMax:    "1e8",
+	})
+	checkQuery(t, qe, url.Values{
+		"liquidity_min": {"1000.1"},
+		"liquidity_max": {"123456789.12345678"},
+		"volume_min":    {"0.29"},
+		"volume_max":    {"1e8"},
+	})
+
+	qm := url.Values{}
+	setMarketFilter(qm, MarketFilter{
+		LiquidityNumMin: "1000.1",
+		VolumeNumMax:    "0.070000000000000007",
+		RewardsMinSize:  "200",
+	})
+	checkQuery(t, qm, url.Values{
+		"liquidity_num_min": {"1000.1"},
+		"volume_num_max":    {"0.070000000000000007"},
+		"rewards_min_size":  {"200"},
+	})
+}
+
+// TestUnsetBoundOmitsKey checks that the zero value, the empty json.Number,
+// omits the key entirely, while an explicit "0" is a real threshold and
+// reaches the wire.
+func TestUnsetBoundOmitsKey(t *testing.T) {
+	q := url.Values{}
+	setEventFilter(q, EventFilter{})
+	if q.Has("liquidity_min") || q.Has("volume_min") {
+		t.Errorf("unset bounds set a key: %v", q)
+	}
+
+	qZero := url.Values{}
+	setEventFilter(qZero, EventFilter{LiquidityMin: "0"})
+	if got := qZero.Get("liquidity_min"); got != "0" {
+		t.Errorf("liquidity_min = %q, want \"0\"", got)
+	}
+}
+
+// TestFilterBodyMarshalsBoundsAsNumbers pins the POST body's wire shape.
+// json.Number marshals bare, so the body Gamma receives carries the bounds as
+// JSON numbers; a quoted "1000.1" would be a different request.
+func TestFilterBodyMarshalsBoundsAsNumbers(t *testing.T) {
+	b, err := json.Marshal(MarketsFilterBody{
+		LiquidityNumMin: "1000.1",
+		VolumeNumMax:    "123456789.12345678",
+		RewardsMinSize:  "200",
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got := string(b)
+	want := `{"rewardsMinSize":200,"liquidityNumMin":1000.1,"volumeNumMax":123456789.12345678}`
+	if got != want {
+		t.Errorf("body = %s, want %s", got, want)
+	}
+
+	empty, err := json.Marshal(MarketsFilterBody{})
+	if err != nil {
+		t.Fatalf("marshal empty: %v", err)
+	}
+	if string(empty) != "{}" {
+		t.Errorf("empty body = %s, want {}", empty)
+	}
 }
 
 func TestSetPageAscendingFalseReachesWire(t *testing.T) {

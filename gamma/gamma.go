@@ -28,22 +28,25 @@ package gamma
 // "offset is not allowed on keyset endpoints"), which is why the Keyset
 // parameter types below carry no Offset field at all.
 //
-// FLOAT64: Gamma's numeric fields (prices, liquidity, volume, spreads) are
-// display and analytics readings — the figures a Polymarket page renders —
-// never amounts that flow through order construction or get signed, so the
-// no-float64 rule in CLAUDE.md does not apply to them, the same reasoning
-// data.go's Position type documents. BestBid, BestAsk and LastTradePrice in
-// particular are Gamma's own cached, advisory view of a market's price, not
-// a live order-book read — use the clob package's Price/Book methods for
-// anything that feeds an order.
+// NUMBERS: every money, price and size field below is json.Number, holding
+// the exact decimal text Gamma sent — see the package doc for how to read
+// one. BestBid, BestAsk and LastTradePrice remain Gamma's own cached,
+// advisory view of a market's price, not a live order-book read: use the
+// clob package's Price/Book methods for anything that feeds an order. The
+// numbers that stay float64 are the ones that are not amounts — the sports
+// betting lines, the Competitive ranking score, ImageOptimization's
+// kilobyte sizes, and the fee curve — each documented where it is declared.
 //
 // NULLABILITY: Gamma's schema marks most fields "not required" rather than
 // nullable, and several fields documented non-nullable are observed live as
 // "" or 0 rather than omitted. This package follows the rest of this
 // codebase's convention of never using pointers for scalar fields: an absent
-// or null field simply decodes to its Go zero value. Nested single-object
-// fields (FeeSchedule, ImageOptimization, CryptoMarketConfig, ...) behave
-// the same way — a zero-valued struct when Gamma omits the relation.
+// or null field simply decodes to its Go zero value. For a json.Number that
+// zero value is the empty string, not "0": an omitted amount is
+// indistinguishable from one Gamma reports as absent, and neither is a
+// number big.Rat will parse. Nested single-object fields (FeeSchedule,
+// ImageOptimization, CryptoMarketConfig, ...) behave the same way — a
+// zero-valued struct when Gamma omits the relation.
 
 import (
 	"context"
@@ -100,9 +103,13 @@ func setInt64(q url.Values, key string, val int64) {
 	}
 }
 
-func setFloat64(q url.Values, key string, val float64) {
-	if val != 0 {
-		q.Set(key, strconv.FormatFloat(val, 'f', -1, 64))
+// setNumber sends a numeric filter bound. Bounds are json.Number for the
+// same reason the response fields are: liquidity, volume and reward sizes
+// are amounts of money, and a bound written as text reaches the server as
+// the caller wrote it. The empty value means "no bound" and is omitted.
+func setNumber(q url.Values, key string, val json.Number) {
+	if val != "" {
+		q.Set(key, string(val))
 	}
 }
 
@@ -232,6 +239,9 @@ const (
 // ImageOptimization is CDN-optimized-image metadata, embedded wherever a
 // Market or Event carries an *Optimized field (IconOptimized,
 // ImageOptimized, FeaturedImageOptimized).
+//
+// ImageSizeKbOptimized and ImageSizeKbSource are file sizes in kilobytes,
+// not amounts of money or of shares, so they stay float64.
 type ImageOptimization struct {
 	Field                     string  `json:"field"`
 	ID                        string  `json:"id"`
@@ -246,25 +256,38 @@ type ImageOptimization struct {
 }
 
 // FeeSchedule is a Market's fee configuration, embedded as Market.FeeSchedule.
+//
+// Rate and Exponent are the market's fee curve — the same pair the CLOB
+// reports as a market's "r" and "e" (verified live: a market whose Gamma
+// FeeSchedule reads {exponent: 1, rate: 0.04} carries the same curve on the
+// CLOB). They feed the pre-trade fee estimate, which raises a price to a
+// fractional exponent and so is computed in float64 by definition; the
+// estimate is advisory and never signed, the one exception CLAUDE.md's
+// no-float64 rule allows. RebateRate is not part of that curve: it is the
+// maker's share of the collected fee, an ordinary rate over an amount of
+// money, so it keeps the server's exact text.
 type FeeSchedule struct {
-	Exponent   float64 `json:"exponent"`
-	Rate       float64 `json:"rate"`
-	RebateRate float64 `json:"rebateRate"`
-	TakerOnly  bool    `json:"takerOnly"`
+	Exponent   float64     `json:"exponent"`
+	Rate       float64     `json:"rate"`
+	RebateRate json.Number `json:"rebateRate"`
+	TakerOnly  bool        `json:"takerOnly"`
 }
 
 // ClobRewards is one asset's liquidity-reward configuration for a market,
 // embedded as Market.ClobRewards[]. Unlike Outcomes/OutcomePrices/
 // ClobTokenIDs, this field is a genuine native JSON array, not a
 // stringified one.
+//
+// RewardsAmount and RewardsDailyRate are amounts of the reward asset
+// AssetAddress names, so they carry the server's exact text.
 type ClobRewards struct {
-	AssetAddress     string  `json:"assetAddress"`
-	ConditionID      string  `json:"conditionId"`
-	EndDate          string  `json:"endDate"`
-	ID               string  `json:"id"`
-	RewardsAmount    float64 `json:"rewardsAmount"`
-	RewardsDailyRate float64 `json:"rewardsDailyRate"`
-	StartDate        string  `json:"startDate"`
+	AssetAddress     string      `json:"assetAddress"`
+	ConditionID      string      `json:"conditionId"`
+	EndDate          string      `json:"endDate"`
+	ID               string      `json:"id"`
+	RewardsAmount    json.Number `json:"rewardsAmount"`
+	RewardsDailyRate json.Number `json:"rewardsDailyRate"`
+	StartDate        string      `json:"startDate"`
 }
 
 // CryptoMarketConfig is a Market's crypto-price-feed configuration,
@@ -289,6 +312,9 @@ type InternalUser struct {
 // BestLine is one sports betting line attached to an Event, embedded as
 // Event.BestLines[]. Fields beyond these three are UNVERIFIED: the live
 // schema documents only id, line and lineType.
+//
+// Line is a threshold on a score (observed live on markets as -1.5, -2.5),
+// neither an amount of money nor a number of shares, so it stays float64.
 type BestLine struct {
 	ID       string  `json:"id"`
 	Line     float64 `json:"line"`
@@ -323,7 +349,8 @@ type Tag struct {
 //
 // Series.Competitive and Series.CreatedBy/UpdatedBy are strings, unlike the
 // same-named fields on Market (float64, int64) — an asymmetry in Gamma's own
-// schema, not a transcription slip; see this file's top-level doc comment.
+// schema, not a transcription slip (verified live: GET /series sends
+// "competitive":"0", quoted); see this file's top-level doc comment.
 // Series.TemplateVariables is a bool here, where Market's and Event's
 // same-named field is a string — likewise a genuine schema asymmetry.
 type Series struct {
@@ -346,7 +373,7 @@ type Series struct {
 	InternalUsers       []InternalUser `json:"internalUsers"`
 	IsTemplate          bool           `json:"isTemplate"`
 	Layout              string         `json:"layout"`
-	Liquidity           float64        `json:"liquidity"`
+	Liquidity           json.Number    `json:"liquidity"`
 	New                 bool           `json:"new"`
 	PublishedAt         string         `json:"publishedAt"`
 	PythTokenID         string         `json:"pythTokenID"`
@@ -364,8 +391,8 @@ type Series struct {
 	Title               string         `json:"title"`
 	UpdatedAt           string         `json:"updatedAt"`
 	UpdatedBy           string         `json:"updatedBy"`
-	Volume              float64        `json:"volume"`
-	Volume24hr          float64        `json:"volume24hr"`
+	Volume              json.Number    `json:"volume"`
+	Volume24hr          json.Number    `json:"volume24hr"`
 }
 
 // A Template is a market/event creation template, embedded as
@@ -518,22 +545,22 @@ type Team struct {
 // below, never json.Unmarshal directly into a slice. See this file's
 // top-level doc comment for the full explanation.
 type Market struct {
-	Schema                   string  `json:"$schema"`
-	AcceptingOrders          bool    `json:"acceptingOrders"`
-	AcceptingOrdersTimestamp string  `json:"acceptingOrdersTimestamp"`
-	AcceptingOrdersUntil     string  `json:"acceptingOrdersUntil"`
-	Active                   bool    `json:"active"`
-	AMMType                  string  `json:"ammType"`
-	Approved                 bool    `json:"approved"`
-	Archived                 bool    `json:"archived"`
-	AutomaticallyActive      bool    `json:"automaticallyActive"`
-	AutomaticallyResolved    bool    `json:"automaticallyResolved"`
-	BestAsk                  float64 `json:"bestAsk"`
-	BestBid                  float64 `json:"bestBid"`
-	Category                 string  `json:"category"`
-	CategoryMailchimpTag     string  `json:"categoryMailchimpTag"`
-	ChartColor               string  `json:"chartColor"`
-	ClearBookOnStart         bool    `json:"clearBookOnStart"`
+	Schema                   string      `json:"$schema"`
+	AcceptingOrders          bool        `json:"acceptingOrders"`
+	AcceptingOrdersTimestamp string      `json:"acceptingOrdersTimestamp"`
+	AcceptingOrdersUntil     string      `json:"acceptingOrdersUntil"`
+	Active                   bool        `json:"active"`
+	AMMType                  string      `json:"ammType"`
+	Approved                 bool        `json:"approved"`
+	Archived                 bool        `json:"archived"`
+	AutomaticallyActive      bool        `json:"automaticallyActive"`
+	AutomaticallyResolved    bool        `json:"automaticallyResolved"`
+	BestAsk                  json.Number `json:"bestAsk"`
+	BestBid                  json.Number `json:"bestBid"`
+	Category                 string      `json:"category"`
+	CategoryMailchimpTag     string      `json:"categoryMailchimpTag"`
+	ChartColor               string      `json:"chartColor"`
+	ClearBookOnStart         bool        `json:"clearBookOnStart"`
 	// ClobRewards is a genuine native array (not stringified).
 	ClobRewards []ClobRewards `json:"clobRewards"`
 	// ClobTokenIDs is a stringified JSON array — decode with DecodeClobTokenIDs.
@@ -543,8 +570,10 @@ type Market struct {
 	// ComboStatus can only be set at creation (enabled requires a ConditionID
 	// and two position ids); after creation it changes only through the
 	// dedicated combo-status endpoint, not a plain market update.
-	ComboStatus          ComboStatus        `json:"comboStatus"`
-	CommentsEnabled      bool               `json:"commentsEnabled"`
+	ComboStatus     ComboStatus `json:"comboStatus"`
+	CommentsEnabled bool        `json:"commentsEnabled"`
+	// Competitive is a ranking score in [0, 1] for how tightly a market is
+	// quoted, not an amount, so it stays float64.
 	Competitive          float64            `json:"competitive"`
 	ConditionID          string             `json:"conditionId"`
 	CreatedAt            string             `json:"createdAt"`
@@ -565,9 +594,13 @@ type Market struct {
 	EndDateISO           string             `json:"endDateIso"`
 	EventStartTime       string             `json:"eventStartTime"`
 	// Events is populated on the top-level GET /markets response.
-	Events                []Event           `json:"events"`
-	Featured              bool              `json:"featured"`
-	Fee                   string            `json:"fee"`
+	Events   []Event `json:"events"`
+	Featured bool    `json:"featured"`
+	Fee      string  `json:"fee"`
+	// FeeExponent and FeeRate are this market's fee curve, the flattened
+	// form of FeeSchedule.Exponent and FeeSchedule.Rate — float64 for the
+	// reason FeeSchedule documents. UNVERIFIED: neither key appears in any
+	// live response sampled; the schema documents both.
 	FeeExponent           float64           `json:"feeExponent"`
 	FeeRate               float64           `json:"feeRate"`
 	FeeSchedule           FeeSchedule       `json:"feeSchedule"`
@@ -590,13 +623,15 @@ type Market struct {
 	Image                 string            `json:"image"`
 	ImageOptimized        ImageOptimization `json:"imageOptimized"`
 	InternalUsers         []InternalUser    `json:"internalUsers"`
-	LastTradePrice        float64           `json:"lastTradePrice"`
-	Line                  float64           `json:"line"`
+	LastTradePrice        json.Number       `json:"lastTradePrice"`
+	// Line is a sports betting line, a threshold on a score rather than an
+	// amount — see BestLine.
+	Line float64 `json:"line"`
 	// Liquidity is a decimal string on this endpoint; prefer LiquidityNum.
 	Liquidity               string         `json:"liquidity"`
-	LiquidityAMM            float64        `json:"liquidityAmm"`
-	LiquidityCLOB           float64        `json:"liquidityClob"`
-	LiquidityNum            float64        `json:"liquidityNum"`
+	LiquidityAMM            json.Number    `json:"liquidityAmm"`
+	LiquidityCLOB           json.Number    `json:"liquidityClob"`
+	LiquidityNum            json.Number    `json:"liquidityNum"`
 	LowerBound              string         `json:"lowerBound"`
 	LowerBoundDate          string         `json:"lowerBoundDate"`
 	MailchimpTag            string         `json:"mailchimpTag"`
@@ -620,14 +655,14 @@ type Market struct {
 	// with the bottom 3 bytes zero, equal to the v2 ConditionID with its
 	// condition index cleared. Shared by every market of a neg-risk event.
 	// Present only on v2 markets; read-only, derived from the v2 ConditionID.
-	OnchainEventID        string  `json:"onchainEventId"`
-	OneDayPriceChange     float64 `json:"oneDayPriceChange"`
-	OneHourPriceChange    float64 `json:"oneHourPriceChange"`
-	OneMonthPriceChange   float64 `json:"oneMonthPriceChange"`
-	OneWeekPriceChange    float64 `json:"oneWeekPriceChange"`
-	OneYearPriceChange    float64 `json:"oneYearPriceChange"`
-	OrderMinSize          float64 `json:"orderMinSize"`
-	OrderPriceMinTickSize float64 `json:"orderPriceMinTickSize"`
+	OnchainEventID        string      `json:"onchainEventId"`
+	OneDayPriceChange     json.Number `json:"oneDayPriceChange"`
+	OneHourPriceChange    json.Number `json:"oneHourPriceChange"`
+	OneMonthPriceChange   json.Number `json:"oneMonthPriceChange"`
+	OneWeekPriceChange    json.Number `json:"oneWeekPriceChange"`
+	OneYearPriceChange    json.Number `json:"oneYearPriceChange"`
+	OrderMinSize          json.Number `json:"orderMinSize"`
+	OrderPriceMinTickSize json.Number `json:"orderPriceMinTickSize"`
 	// OutcomePrices is a stringified JSON array — decode with DecodeOutcomePrices.
 	OutcomePrices string `json:"outcomePrices"`
 	// Outcomes is a stringified JSON array — decode with DecodeOutcomes.
@@ -650,8 +685,8 @@ type Market struct {
 	ResolutionStatus             ResolutionStatus `json:"resolutionStatus"`
 	ResolvedBy                   string           `json:"resolvedBy"`
 	Restricted                   bool             `json:"restricted"`
-	RewardsMaxSpread             float64          `json:"rewardsMaxSpread"`
-	RewardsMinSize               float64          `json:"rewardsMinSize"`
+	RewardsMaxSpread             json.Number      `json:"rewardsMaxSpread"`
+	RewardsMinSize               json.Number      `json:"rewardsMinSize"`
 	RFQEnabled                   bool             `json:"rfqEnabled"`
 	ScheduledDeploymentTimestamp string           `json:"scheduledDeploymentTimestamp"`
 	Score                        int64            `json:"score"`
@@ -659,17 +694,17 @@ type Market struct {
 	SentDiscord                  bool             `json:"sentDiscord"`
 	SeriesColor                  string           `json:"seriesColor"`
 	// ShortOutcomes' encoding is UNVERIFIED — same caveat as PastSlugs.
-	ShortOutcomes    string  `json:"shortOutcomes"`
-	ShowGMPOutcome   bool    `json:"showGmpOutcome"`
-	ShowGMPSeries    bool    `json:"showGmpSeries"`
-	Slug             string  `json:"slug"`
-	SponsorImage     string  `json:"sponsorImage"`
-	SponsorName      string  `json:"sponsorName"`
-	SportsMarketType string  `json:"sportsMarketType"`
-	Spread           float64 `json:"spread"`
-	StartDate        string  `json:"startDate"`
-	StartDateISO     string  `json:"startDateIso"`
-	Subcategory      string  `json:"subcategory"`
+	ShortOutcomes    string      `json:"shortOutcomes"`
+	ShowGMPOutcome   bool        `json:"showGmpOutcome"`
+	ShowGMPSeries    bool        `json:"showGmpSeries"`
+	Slug             string      `json:"slug"`
+	SponsorImage     string      `json:"sponsorImage"`
+	SponsorName      string      `json:"sponsorName"`
+	SportsMarketType string      `json:"sportsMarketType"`
+	Spread           json.Number `json:"spread"`
+	StartDate        string      `json:"startDate"`
+	StartDateISO     string      `json:"startDateIso"`
+	Subcategory      string      `json:"subcategory"`
 	// SubmittedBy's wire key is the literal snake_case "submitted_by" — the
 	// one field on Market that breaks from the otherwise-consistent
 	// camelCase convention.
@@ -696,25 +731,25 @@ type Market struct {
 	UpperBoundDate        string          `json:"upperBoundDate"`
 	Version               ProtocolVersion `json:"version"`
 	// Volume is a decimal string on this endpoint; prefer VolumeNum.
-	Volume         string  `json:"volume"`
-	Volume1mo      float64 `json:"volume1mo"`
-	Volume1moAMM   float64 `json:"volume1moAmm"`
-	Volume1moCLOB  float64 `json:"volume1moClob"`
-	Volume1wk      float64 `json:"volume1wk"`
-	Volume1wkAMM   float64 `json:"volume1wkAmm"`
-	Volume1wkCLOB  float64 `json:"volume1wkClob"`
-	Volume1yr      float64 `json:"volume1yr"`
-	Volume1yrAMM   float64 `json:"volume1yrAmm"`
-	Volume1yrCLOB  float64 `json:"volume1yrClob"`
-	Volume24hr     float64 `json:"volume24hr"`
-	Volume24hrAMM  float64 `json:"volume24hrAmm"`
-	Volume24hrCLOB float64 `json:"volume24hrClob"`
-	VolumeAMM      float64 `json:"volumeAmm"`
-	VolumeCLOB     float64 `json:"volumeClob"`
-	VolumeNum      float64 `json:"volumeNum"`
-	WideFormat     bool    `json:"wideFormat"`
-	XAxisValue     string  `json:"xAxisValue"`
-	YAxisValue     string  `json:"yAxisValue"`
+	Volume         string      `json:"volume"`
+	Volume1mo      json.Number `json:"volume1mo"`
+	Volume1moAMM   json.Number `json:"volume1moAmm"`
+	Volume1moCLOB  json.Number `json:"volume1moClob"`
+	Volume1wk      json.Number `json:"volume1wk"`
+	Volume1wkAMM   json.Number `json:"volume1wkAmm"`
+	Volume1wkCLOB  json.Number `json:"volume1wkClob"`
+	Volume1yr      json.Number `json:"volume1yr"`
+	Volume1yrAMM   json.Number `json:"volume1yrAmm"`
+	Volume1yrCLOB  json.Number `json:"volume1yrClob"`
+	Volume24hr     json.Number `json:"volume24hr"`
+	Volume24hrAMM  json.Number `json:"volume24hrAmm"`
+	Volume24hrCLOB json.Number `json:"volume24hrClob"`
+	VolumeAMM      json.Number `json:"volumeAmm"`
+	VolumeCLOB     json.Number `json:"volumeClob"`
+	VolumeNum      json.Number `json:"volumeNum"`
+	WideFormat     bool        `json:"wideFormat"`
+	XAxisValue     string      `json:"xAxisValue"`
+	YAxisValue     string      `json:"yAxisValue"`
 }
 
 // A RelatedMarket is one entry in GET /markets/{id}/related-markets: a
@@ -750,24 +785,26 @@ type RelatedMarket struct {
 //	field         Market type   Event type
 //	createdBy     int64         string
 //	gameId        string        int64
-//	liquidity     string        float64 (Market's is a decimal string)
+//	liquidity     string        json.Number (Market sends it quoted)
 //	score         int64         string
 //	updatedBy     int64         string
 type Event struct {
-	Schema                 string                        `json:"$schema"`
-	Active                 bool                          `json:"active"`
-	Archived               bool                          `json:"archived"`
-	AutomaticallyActive    bool                          `json:"automaticallyActive"`
-	AutomaticallyResolved  bool                          `json:"automaticallyResolved"`
-	BestLines              []BestLine                    `json:"bestLines"`
-	CantEstimate           bool                          `json:"cantEstimate"`
-	CarouselMap            string                        `json:"carouselMap"`
-	Category               string                        `json:"category"`
-	Closed                 bool                          `json:"closed"`
-	ClosedTime             string                        `json:"closedTime"`
-	Color                  string                        `json:"color"`
-	CommentCount           int64                         `json:"commentCount"`
-	CommentsEnabled        bool                          `json:"commentsEnabled"`
+	Schema                string     `json:"$schema"`
+	Active                bool       `json:"active"`
+	Archived              bool       `json:"archived"`
+	AutomaticallyActive   bool       `json:"automaticallyActive"`
+	AutomaticallyResolved bool       `json:"automaticallyResolved"`
+	BestLines             []BestLine `json:"bestLines"`
+	CantEstimate          bool       `json:"cantEstimate"`
+	CarouselMap           string     `json:"carouselMap"`
+	Category              string     `json:"category"`
+	Closed                bool       `json:"closed"`
+	ClosedTime            string     `json:"closedTime"`
+	Color                 string     `json:"color"`
+	CommentCount          int64      `json:"commentCount"`
+	CommentsEnabled       bool       `json:"commentsEnabled"`
+	// Competitive is the ranking score Market.Competitive documents, and
+	// stays float64 for the same reason.
 	Competitive            float64                       `json:"competitive"`
 	CountryName            string                        `json:"countryName"`
 	CreatedAt              string                        `json:"createdAt"`
@@ -809,9 +846,9 @@ type Event struct {
 	LastHighlight          string                        `json:"lastHighlight"`
 	LastHighlightAt        string                        `json:"lastHighlightAt"`
 	LastHighlightType      string                        `json:"lastHighlightType"`
-	Liquidity              float64                       `json:"liquidity"`
-	LiquidityAMM           float64                       `json:"liquidityAmm"`
-	LiquidityCLOB          float64                       `json:"liquidityClob"`
+	Liquidity              json.Number                   `json:"liquidity"`
+	LiquidityAMM           json.Number                   `json:"liquidityAmm"`
+	LiquidityCLOB          json.Number                   `json:"liquidityClob"`
 	Live                   bool                          `json:"live"`
 	Markets                []Market                      `json:"markets"`
 	NegRisk                bool                          `json:"negRisk"`
@@ -819,7 +856,7 @@ type Event struct {
 	NegRiskFeeBips         int64                         `json:"negRiskFeeBips"`
 	NegRiskMarketID        string                        `json:"negRiskMarketID"`
 	New                    bool                          `json:"new"`
-	OpenInterest           float64                       `json:"openInterest"`
+	OpenInterest           json.Number                   `json:"openInterest"`
 	ParentEventID          int64                         `json:"parentEventId"`
 	PendingDeployment      bool                          `json:"pendingDeployment"`
 	Period                 string                        `json:"period"`
@@ -841,33 +878,39 @@ type Event struct {
 	Slug                         string         `json:"slug"`
 	SortBy                       string         `json:"sortBy"`
 	Sport                        SportsMetadata `json:"sport"`
-	SpreadsMainLine              float64        `json:"spreadsMainLine"`
-	StartDate                    string         `json:"startDate"`
-	StartTime                    string         `json:"startTime"`
-	SubEvents                    []string       `json:"subEvents"`
-	Subcategory                  string         `json:"subcategory"`
-	Subtitle                     string         `json:"subtitle"`
+	// SpreadsMainLine is the event's headline spread line, a threshold on a
+	// score rather than an amount — see BestLine. UNVERIFIED: the key
+	// appears in no live response sampled.
+	SpreadsMainLine float64  `json:"spreadsMainLine"`
+	StartDate       string   `json:"startDate"`
+	StartTime       string   `json:"startTime"`
+	SubEvents       []string `json:"subEvents"`
+	Subcategory     string   `json:"subcategory"`
+	Subtitle        string   `json:"subtitle"`
 	// TagLabels' and TagSlugs' wire keys are the literal snake_case
 	// "tag_labels" / "tag_slugs" — the same asymmetry Market.SubmittedBy has.
-	TagLabels         []string        `json:"tag_labels"`
-	TagSlugs          []string        `json:"tag_slugs"`
-	Tags              []Tag           `json:"tags"`
-	Teams             []Team          `json:"teams"`
-	TemplateVariables string          `json:"templateVariables"`
-	Templates         []Template      `json:"templates"`
-	Ticker            string          `json:"ticker"`
-	Title             string          `json:"title"`
-	TotalsMainLine    float64         `json:"totalsMainLine"`
-	TurnProviderID    string          `json:"turnProviderId"`
-	TweetCount        int64           `json:"tweetCount"`
-	UpdatedAt         string          `json:"updatedAt"`
-	UpdatedBy         string          `json:"updatedBy"`
-	Version           ProtocolVersion `json:"version"`
-	Volume            float64         `json:"volume"`
-	Volume1mo         float64         `json:"volume1mo"`
-	Volume1wk         float64         `json:"volume1wk"`
-	Volume1yr         float64         `json:"volume1yr"`
-	Volume24hr        float64         `json:"volume24hr"`
+	TagLabels         []string   `json:"tag_labels"`
+	TagSlugs          []string   `json:"tag_slugs"`
+	Tags              []Tag      `json:"tags"`
+	Teams             []Team     `json:"teams"`
+	TemplateVariables string     `json:"templateVariables"`
+	Templates         []Template `json:"templates"`
+	Ticker            string     `json:"ticker"`
+	Title             string     `json:"title"`
+	// TotalsMainLine is the event's headline totals line, a threshold on a
+	// score rather than an amount — see BestLine. UNVERIFIED: the key
+	// appears in no live response sampled.
+	TotalsMainLine float64         `json:"totalsMainLine"`
+	TurnProviderID string          `json:"turnProviderId"`
+	TweetCount     int64           `json:"tweetCount"`
+	UpdatedAt      string          `json:"updatedAt"`
+	UpdatedBy      string          `json:"updatedBy"`
+	Version        ProtocolVersion `json:"version"`
+	Volume         json.Number     `json:"volume"`
+	Volume1mo      json.Number     `json:"volume1mo"`
+	Volume1wk      json.Number     `json:"volume1wk"`
+	Volume1yr      json.Number     `json:"volume1yr"`
+	Volume24hr     json.Number     `json:"volume24hr"`
 }
 
 // ---------------------------------------------------------------------------
@@ -924,10 +967,10 @@ type EventFilter struct {
 	Slug               []string
 	Closed             *bool
 	Live               *bool
-	LiquidityMin       float64
-	LiquidityMax       float64
-	VolumeMin          float64
-	VolumeMax          float64
+	LiquidityMin       json.Number
+	LiquidityMax       json.Number
+	VolumeMin          json.Number
+	VolumeMax          json.Number
 	StartDateMin       string
 	StartDateMax       string
 	EndDateMin         string
@@ -965,10 +1008,10 @@ func setEventFilter(q url.Values, f EventFilter) {
 	setStrs(q, "slug", f.Slug)
 	setBool(q, "closed", f.Closed)
 	setBool(q, "live", f.Live)
-	setFloat64(q, "liquidity_min", f.LiquidityMin)
-	setFloat64(q, "liquidity_max", f.LiquidityMax)
-	setFloat64(q, "volume_min", f.VolumeMin)
-	setFloat64(q, "volume_max", f.VolumeMax)
+	setNumber(q, "liquidity_min", f.LiquidityMin)
+	setNumber(q, "liquidity_max", f.LiquidityMax)
+	setNumber(q, "volume_min", f.VolumeMin)
+	setNumber(q, "volume_max", f.VolumeMax)
 	setStr(q, "start_date_min", f.StartDateMin)
 	setStr(q, "start_date_max", f.StartDateMax)
 	setStr(q, "end_date_min", f.EndDateMin)
@@ -1317,10 +1360,10 @@ type MarketFilter struct {
 	PositionIDs         []string
 	ConditionIDs        []string
 	MarketMakerAddress  []string
-	LiquidityNumMin     float64
-	LiquidityNumMax     float64
-	VolumeNumMin        float64
-	VolumeNumMax        float64
+	LiquidityNumMin     json.Number
+	LiquidityNumMax     json.Number
+	VolumeNumMin        json.Number
+	VolumeNumMax        json.Number
 	StartDateMin        string
 	StartDateMax        string
 	EndDateMin          string
@@ -1334,7 +1377,7 @@ type MarketFilter struct {
 	UMAResolutionStatus string
 	GameID              string
 	SportsMarketTypes   []string
-	RewardsMinSize      float64
+	RewardsMinSize      json.Number
 	QuestionIDs         []string
 	IncludeTag          *bool
 	Locale              string
@@ -1353,10 +1396,10 @@ func setMarketFilter(q url.Values, f MarketFilter) {
 	setStrs(q, "position_ids", f.PositionIDs)
 	setStrs(q, "condition_ids", f.ConditionIDs)
 	setStrs(q, "market_maker_address", f.MarketMakerAddress)
-	setFloat64(q, "liquidity_num_min", f.LiquidityNumMin)
-	setFloat64(q, "liquidity_num_max", f.LiquidityNumMax)
-	setFloat64(q, "volume_num_min", f.VolumeNumMin)
-	setFloat64(q, "volume_num_max", f.VolumeNumMax)
+	setNumber(q, "liquidity_num_min", f.LiquidityNumMin)
+	setNumber(q, "liquidity_num_max", f.LiquidityNumMax)
+	setNumber(q, "volume_num_min", f.VolumeNumMin)
+	setNumber(q, "volume_num_max", f.VolumeNumMax)
 	setStr(q, "start_date_min", f.StartDateMin)
 	setStr(q, "start_date_max", f.StartDateMax)
 	setStr(q, "end_date_min", f.EndDateMin)
@@ -1370,7 +1413,7 @@ func setMarketFilter(q url.Values, f MarketFilter) {
 	setStr(q, "uma_resolution_status", f.UMAResolutionStatus)
 	setStr(q, "game_id", f.GameID)
 	setStrs(q, "sports_market_types", f.SportsMarketTypes)
-	setFloat64(q, "rewards_min_size", f.RewardsMinSize)
+	setNumber(q, "rewards_min_size", f.RewardsMinSize)
 	setStrs(q, "question_ids", f.QuestionIDs)
 	setBool(q, "include_tag", f.IncludeTag)
 	setStr(q, "locale", f.Locale)
@@ -1420,33 +1463,37 @@ type RelatedMarketsParams struct {
 // sent as a request body instead of query parameters. Both endpoints
 // additionally accept Limit/Offset/Order/Ascending as query parameters
 // alongside this body — see ListControl and MarketsInformation.
+//
+// Its numeric bounds are json.Number for the reason setNumber documents.
+// json.Number marshals bare, so the body carries them as JSON numbers, not
+// strings.
 type MarketsFilterBody struct {
-	ID                  []int64  `json:"id,omitempty"`
-	Slug                []string `json:"slug,omitempty"`
-	Closed              *bool    `json:"closed,omitempty"`
-	ClobTokenIDs        []string `json:"clobTokenIds,omitempty"`
-	ConditionIDs        []string `json:"conditionIds,omitempty"`
-	QuestionIDs         []string `json:"questionIds,omitempty"`
-	PositionIDs         []string `json:"positionIds,omitempty"`
-	MarketMakerAddress  []string `json:"marketMakerAddress,omitempty"`
-	ComboStatus         string   `json:"comboStatus,omitempty"`
-	CYOM                *bool    `json:"cyom,omitempty"`
-	RFQEnabled          *bool    `json:"rfqEnabled,omitempty"`
-	RelatedTags         *bool    `json:"relatedTags,omitempty"`
-	TagID               []int64  `json:"tagId,omitempty"`
-	IncludeTags         *bool    `json:"includeTags,omitempty"`
-	UMAResolutionStatus string   `json:"umaResolutionStatus,omitempty"`
-	GameID              string   `json:"gameId,omitempty"`
-	SportsMarketTypes   []string `json:"sportsMarketTypes,omitempty"`
-	RewardsMinSize      float64  `json:"rewardsMinSize,omitempty"`
-	LiquidityNumMin     float64  `json:"liquidityNumMin,omitempty"`
-	LiquidityNumMax     float64  `json:"liquidityNumMax,omitempty"`
-	VolumeNumMin        float64  `json:"volumeNumMin,omitempty"`
-	VolumeNumMax        float64  `json:"volumeNumMax,omitempty"`
-	StartDateMin        string   `json:"startDateMin,omitempty"`
-	StartDateMax        string   `json:"startDateMax,omitempty"`
-	EndDateMin          string   `json:"endDateMin,omitempty"`
-	EndDateMax          string   `json:"endDateMax,omitempty"`
+	ID                  []int64     `json:"id,omitempty"`
+	Slug                []string    `json:"slug,omitempty"`
+	Closed              *bool       `json:"closed,omitempty"`
+	ClobTokenIDs        []string    `json:"clobTokenIds,omitempty"`
+	ConditionIDs        []string    `json:"conditionIds,omitempty"`
+	QuestionIDs         []string    `json:"questionIds,omitempty"`
+	PositionIDs         []string    `json:"positionIds,omitempty"`
+	MarketMakerAddress  []string    `json:"marketMakerAddress,omitempty"`
+	ComboStatus         string      `json:"comboStatus,omitempty"`
+	CYOM                *bool       `json:"cyom,omitempty"`
+	RFQEnabled          *bool       `json:"rfqEnabled,omitempty"`
+	RelatedTags         *bool       `json:"relatedTags,omitempty"`
+	TagID               []int64     `json:"tagId,omitempty"`
+	IncludeTags         *bool       `json:"includeTags,omitempty"`
+	UMAResolutionStatus string      `json:"umaResolutionStatus,omitempty"`
+	GameID              string      `json:"gameId,omitempty"`
+	SportsMarketTypes   []string    `json:"sportsMarketTypes,omitempty"`
+	RewardsMinSize      json.Number `json:"rewardsMinSize,omitempty"`
+	LiquidityNumMin     json.Number `json:"liquidityNumMin,omitempty"`
+	LiquidityNumMax     json.Number `json:"liquidityNumMax,omitempty"`
+	VolumeNumMin        json.Number `json:"volumeNumMin,omitempty"`
+	VolumeNumMax        json.Number `json:"volumeNumMax,omitempty"`
+	StartDateMin        string      `json:"startDateMin,omitempty"`
+	StartDateMax        string      `json:"startDateMax,omitempty"`
+	EndDateMin          string      `json:"endDateMin,omitempty"`
+	EndDateMax          string      `json:"endDateMax,omitempty"`
 }
 
 // ListControl is the limit/offset/order/ascending controls POST

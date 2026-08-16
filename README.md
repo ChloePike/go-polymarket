@@ -5,7 +5,8 @@
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
 
 A clean-room Go client for the [Polymarket](https://polymarket.com) APIs —
-the order book, market metadata, portfolio data and the streaming feeds.
+the order book, market metadata, portfolio data, cross-chain funding, the
+gasless relayer and the streaming feeds.
 
 Not affiliated with Polymarket. Protocol details are transcribed from the
 public API and the official TypeScript SDK; no third-party client source is
@@ -92,10 +93,20 @@ c := clob.NewWithSession(s)
 
 ## What makes this client careful
 
-**Exact money math.** Prices and sizes are decimal strings and the integer
-amounts an order carries are computed with `math/big.Rat`. The official SDK
-does this arithmetic in `float64`; a 2520-point grid captured from that SDK
-agrees with this implementation on every point, so exactness costs nothing.
+**Exact money math, everywhere and not just where it is signed.** Prices and
+sizes are decimal strings, the integer amounts an order carries are computed
+with `math/big.Rat`, and **no field carrying money is a `float64`** — a
+position size, a mark-to-market value, a best bid all decode to `json.Number`
+and keep the exact text the server sent. That matters because the size you
+read is the size you sign when you close a position:
+
+```go
+size, err := polymarket.ParseAmount(string(position.Size))   // exact
+```
+
+The official SDK does this arithmetic in `float64`; a 2520-point grid
+captured from that SDK agrees with this implementation on every point, so
+exactness costs nothing.
 
 **Byte-identical signatures.** `testdata/vectors.json` holds order digests,
 signatures, authentication payloads and amounts produced by
@@ -137,6 +148,7 @@ from `decred` — the same library go-ethereum's own pure-Go path wraps — and
 go run ./examples/book         # an order book, live
 go run ./examples/watch        # stream one book and print every move
 go run ./examples/portfolio    # what a wallet holds
+go run ./examples/wallets      # which account a key actually controls
 go run ./examples/authcheck    # prove the signing stack against production
 go run ./examples/check-builder <builder-code>
 ```

@@ -15,15 +15,29 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"os"
 	"sort"
 	"time"
 
+	"github.com/ChloePike/go-polymarket"
 	"github.com/ChloePike/go-polymarket/data"
 )
+
+// A holding pairs a position with its market value and profit parsed as
+// exact rationals. The data API sends both as decimal text, and json.Number
+// has string kind: comparing or adding two of them directly is text work, so
+// "9.5" sorts above "10000.0". Parsing once keeps the order and the totals
+// arithmetic.
+type holding struct {
+	pos   data.Position
+	value *big.Rat
+	pnl   *big.Rat
+}
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
@@ -60,25 +74,52 @@ func main() {
 		return
 	}
 
+	holdings := make([]holding, len(positions))
+	for i, p := range positions {
+		holdings[i] = holding{pos: p, value: rat(p.CurrentValue), pnl: rat(p.CashPnl)}
+	}
+
 	// Biggest position first: that is the one that decides the day.
-	sort.Slice(positions, func(i, j int) bool {
-		return positions[i].CurrentValue > positions[j].CurrentValue
+	sort.Slice(holdings, func(i, j int) bool {
+		return holdings[i].value.Cmp(holdings[j].value) > 0
 	})
 
-	var value, pnl float64
-	for _, p := range positions {
-		value += p.CurrentValue
-		pnl += p.CashPnl
+	value, pnl := new(big.Rat), new(big.Rat)
+	for _, h := range holdings {
+		value.Add(value, h.value)
+		pnl.Add(pnl, h.pnl)
 	}
 
 	fmt.Printf("%s\n", address)
-	fmt.Printf("%d positions, %.2f USDC at market, %+.2f unrealised\n\n", len(positions), value, pnl)
+	fmt.Printf("%d positions, %s USDC at market, %s unrealised\n\n",
+		len(holdings), value.FloatString(2), signed(pnl, 2))
 	fmt.Printf("%-10s %10s %8s %10s %10s\n", "OUTCOME", "SHARES", "AVG", "VALUE", "PNL")
-	for _, p := range positions {
-		fmt.Printf("%-10s %10.2f %8.3f %10.2f %+10.2f   %s\n",
-			truncate(p.Outcome, 10), p.Size, p.AvgPrice, p.CurrentValue, p.CashPnl,
-			truncate(p.Title, 56))
+	for _, h := range holdings {
+		fmt.Printf("%-10s %10s %8s %10s %10s   %s\n",
+			truncate(h.pos.Outcome, 10), rat(h.pos.Size).FloatString(2),
+			rat(h.pos.AvgPrice).FloatString(3), h.value.FloatString(2),
+			signed(h.pnl, 2), truncate(h.pos.Title, 56))
 	}
+}
+
+// rat parses an amount the data API sent. A null or absent number decodes to
+// the empty json.Number, which big.Rat rejects; that reads as "not reported"
+// and counts as zero in a total.
+func rat(n json.Number) *big.Rat {
+	r, err := polymarket.ParseAmount(string(n))
+	if err != nil {
+		return new(big.Rat)
+	}
+	return r
+}
+
+// signed renders an amount with an explicit sign, which FloatString supplies
+// only for negatives.
+func signed(r *big.Rat, prec int) string {
+	if r.Sign() >= 0 {
+		return "+" + r.FloatString(prec)
+	}
+	return r.FloatString(prec)
 }
 
 // topTrader picks an address with real positions so the command runs bare.

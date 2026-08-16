@@ -28,6 +28,7 @@ package gamma
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -126,16 +127,16 @@ type SeriesDetailParams struct {
 // /series-summary/{id} and GET /series-summary/slug/{slug} return: the dates
 // and week numbers a series has open events on, not the full Series object.
 type SeriesSummary struct {
-	Schema           string   `json:"$schema"`
-	EarliestOpenDate string   `json:"earliest_open_date"`
-	EarliestOpenWeek int64    `json:"earliest_open_week"`
-	EventDates       []string `json:"eventDates"`
-	EventWeeks       []int64  `json:"eventWeeks"`
-	ID               string   `json:"id"`
-	Slug             string   `json:"slug"`
-	Title            string   `json:"title"`
-	Volume           float64  `json:"volume"`
-	Volume24hr       float64  `json:"volume24hr"`
+	Schema           string      `json:"$schema"`
+	EarliestOpenDate string      `json:"earliest_open_date"`
+	EarliestOpenWeek int64       `json:"earliest_open_week"`
+	EventDates       []string    `json:"eventDates"`
+	EventWeeks       []int64     `json:"eventWeeks"`
+	ID               string      `json:"id"`
+	Slug             string      `json:"slug"`
+	Title            string      `json:"title"`
+	Volume           json.Number `json:"volume"`
+	Volume24hr       json.Number `json:"volume24hr"`
 }
 
 // Series lists series, filtered and offset-paginated. It needs no
@@ -608,7 +609,7 @@ type PublicProfileResponse struct {
 	TakerTierName         string              `json:"takerTierName"`
 	Users                 []PublicProfileUser `json:"users"`
 	VerifiedBadge         bool                `json:"verifiedBadge"`
-	WeightedVolume        float64             `json:"weightedVolume"`
+	WeightedVolume        json.Number         `json:"weightedVolume"`
 	XUsername             string              `json:"xUsername"`
 }
 

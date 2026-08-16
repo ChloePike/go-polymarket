@@ -5,6 +5,20 @@
 // Gamma is the metadata behind a Polymarket page — titles, slugs, tags,
 // resolution state — and nothing here needs authentication: every endpoint
 // this package wraps is a public, unauthenticated request.
+//
+// Every field that carries money, a price or a size decodes as
+// [encoding/json.Number], which keeps the exact decimal text the server
+// sent. A float64 does not: 0.29 is not representable in binary floating
+// point, and a size read from this API becomes an order size the moment a
+// caller trades on the position behind it. Read such a field through
+// math/big, and print it as text:
+//
+//	v, ok := new(big.Rat).SetString(string(m.LiquidityNum))
+//	fmt.Println(m.LiquidityNum.String())
+//
+// An absent or null number decodes to the empty json.Number, not to "0", and
+// big.Rat rejects the empty string — treat an empty value as "not reported"
+// rather than as zero.
 package gamma
 
 import polymarket "github.com/ChloePike/go-polymarket"

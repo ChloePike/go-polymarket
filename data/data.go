@@ -5,6 +5,7 @@ package data
 
 import (
 	"context"
+	"encoding/json"
 	"net/url"
 	"strconv"
 	"strings"
@@ -105,32 +106,38 @@ func (c *Client) DataHealth(ctx context.Context) (string, error) {
 // A Position is one open position a wallet holds: how many shares of an
 // outcome token it owns, what it paid, and what those shares are worth now.
 //
-// Numeric fields arrive as JSON numbers and are kept float64: these are
-// analytics readings (mark-to-market value, PnL) rather than amounts that
-// flow through order construction or get signed, so the no-float64 rule in
-// CLAUDE.md does not apply to them.
+// Every money, price and size field in this package is a json.Number, which
+// holds the exact decimal text the server sent. These are amounts, and an
+// amount stays exact: a caller who closes a position reads Size here and signs
+// that same number on the order, so any rounding on the way through is
+// rounding on real funds. Parse one exactly:
+//
+//	v, ok := new(big.Rat).SetString(string(p.Size))
+//
+// Print one with p.Size.String(). A field the server omits, or sends as null,
+// stays the empty string, and SetString reports ok false for it.
 type Position struct {
 	ProxyWallet string `json:"proxyWallet"`
 	// Asset is the ERC-1155 token id of the outcome held, as a decimal string.
-	Asset              string  `json:"asset"`
-	ConditionID        string  `json:"conditionId"`
-	Size               float64 `json:"size"`
-	AvgPrice           float64 `json:"avgPrice"`
-	InitialValue       float64 `json:"initialValue"`
-	GrossInitialValue  float64 `json:"grossInitialValue"`
-	EntryFeesUSDC      float64 `json:"entryFeesUsdc"`
-	CurrentValue       float64 `json:"currentValue"`
-	CashPnl            float64 `json:"cashPnl"`
-	PercentPnl         float64 `json:"percentPnl"`
-	TotalBought        float64 `json:"totalBought"`
-	RealizedPnl        float64 `json:"realizedPnl"`
-	PercentRealizedPnl float64 `json:"percentRealizedPnl"`
-	CurPrice           float64 `json:"curPrice"`
-	Redeemable         bool    `json:"redeemable"`
-	Mergeable          bool    `json:"mergeable"`
-	Title              string  `json:"title"`
-	Slug               string  `json:"slug"`
-	Icon               string  `json:"icon"`
+	Asset              string      `json:"asset"`
+	ConditionID        string      `json:"conditionId"`
+	Size               json.Number `json:"size"`
+	AvgPrice           json.Number `json:"avgPrice"`
+	InitialValue       json.Number `json:"initialValue"`
+	GrossInitialValue  json.Number `json:"grossInitialValue"`
+	EntryFeesUSDC      json.Number `json:"entryFeesUsdc"`
+	CurrentValue       json.Number `json:"currentValue"`
+	CashPnl            json.Number `json:"cashPnl"`
+	PercentPnl         json.Number `json:"percentPnl"`
+	TotalBought        json.Number `json:"totalBought"`
+	RealizedPnl        json.Number `json:"realizedPnl"`
+	PercentRealizedPnl json.Number `json:"percentRealizedPnl"`
+	CurPrice           json.Number `json:"curPrice"`
+	Redeemable         bool        `json:"redeemable"`
+	Mergeable          bool        `json:"mergeable"`
+	Title              string      `json:"title"`
+	Slug               string      `json:"slug"`
+	Icon               string      `json:"icon"`
 	// EventID is the Gamma event id. It is a numeric-looking string on the
 	// wire, not a JSON number.
 	EventID         string `json:"eventId"`
@@ -202,22 +209,22 @@ func (c *Client) Positions(ctx context.Context, p PositionsParams) ([]Position, 
 // A ClosedPosition is a position a wallet has fully exited or that resolved,
 // with the realized profit or loss it left behind.
 type ClosedPosition struct {
-	ProxyWallet     string  `json:"proxyWallet"`
-	Asset           string  `json:"asset"`
-	ConditionID     string  `json:"conditionId"`
-	AvgPrice        float64 `json:"avgPrice"`
-	TotalBought     float64 `json:"totalBought"`
-	RealizedPnl     float64 `json:"realizedPnl"`
-	CurPrice        float64 `json:"curPrice"`
-	Title           string  `json:"title"`
-	Slug            string  `json:"slug"`
-	Icon            string  `json:"icon"`
-	EventSlug       string  `json:"eventSlug"`
-	Outcome         string  `json:"outcome"`
-	OutcomeIndex    int     `json:"outcomeIndex"`
-	OppositeOutcome string  `json:"oppositeOutcome"`
-	OppositeAsset   string  `json:"oppositeAsset"`
-	EndDate         string  `json:"endDate"`
+	ProxyWallet     string      `json:"proxyWallet"`
+	Asset           string      `json:"asset"`
+	ConditionID     string      `json:"conditionId"`
+	AvgPrice        json.Number `json:"avgPrice"`
+	TotalBought     json.Number `json:"totalBought"`
+	RealizedPnl     json.Number `json:"realizedPnl"`
+	CurPrice        json.Number `json:"curPrice"`
+	Title           string      `json:"title"`
+	Slug            string      `json:"slug"`
+	Icon            string      `json:"icon"`
+	EventSlug       string      `json:"eventSlug"`
+	Outcome         string      `json:"outcome"`
+	OutcomeIndex    int         `json:"outcomeIndex"`
+	OppositeOutcome string      `json:"oppositeOutcome"`
+	OppositeAsset   string      `json:"oppositeAsset"`
+	EndDate         string      `json:"endDate"`
 	// Timestamp is when the position closed, Unix seconds.
 	Timestamp int64 `json:"timestamp"`
 }
@@ -276,8 +283,8 @@ type Fill struct {
 	Side        polymarket.Side `json:"side"`
 	Asset       string          `json:"asset"`
 	ConditionID string          `json:"conditionId"`
-	Size        float64         `json:"size"`
-	Price       float64         `json:"price"`
+	Size        json.Number     `json:"size"`
+	Price       json.Number     `json:"price"`
 	// Timestamp is Unix seconds.
 	Timestamp int64  `json:"timestamp"`
 	Title     string `json:"title"`
@@ -376,13 +383,14 @@ type Activity struct {
 	Timestamp   int64        `json:"timestamp"`
 	ConditionID string       `json:"conditionId"`
 	Type        ActivityType `json:"type"`
-	Size        float64      `json:"size"`
+	Size        json.Number  `json:"size"`
 	// USDCSize is the cash-equivalent size in USDC, 6-decimal precision.
-	USDCSize        float64 `json:"usdcSize"`
-	TransactionHash string  `json:"transactionHash"`
+	USDCSize        json.Number `json:"usdcSize"`
+	TransactionHash string      `json:"transactionHash"`
 	// Price and Side are meaningful only when Type is ActivityTrade: on any
-	// other row Price is 0 and Side is the empty string.
-	Price                 float64         `json:"price"`
+	// other row the server sends the number zero, so Price reads "0", and Side
+	// is the empty string.
+	Price                 json.Number     `json:"price"`
 	Asset                 string          `json:"asset"`
 	Side                  polymarket.Side `json:"side"`
 	OutcomeIndex          int             `json:"outcomeIndex"`
@@ -461,17 +469,17 @@ func (c *Client) Activity(ctx context.Context, p ActivityParams) ([]Activity, er
 // A Holder is one wallet's stake in a single outcome token, as reported by
 // GET /holders.
 type Holder struct {
-	ProxyWallet           string  `json:"proxyWallet"`
-	Bio                   string  `json:"bio"`
-	Asset                 string  `json:"asset"`
-	Pseudonym             string  `json:"pseudonym"`
-	Amount                float64 `json:"amount"`
-	DisplayUsernamePublic bool    `json:"displayUsernamePublic"`
-	OutcomeIndex          int     `json:"outcomeIndex"`
-	Name                  string  `json:"name"`
-	ProfileImage          string  `json:"profileImage"`
-	ProfileImageOptimized string  `json:"profileImageOptimized"`
-	Verified              bool    `json:"verified"`
+	ProxyWallet           string      `json:"proxyWallet"`
+	Bio                   string      `json:"bio"`
+	Asset                 string      `json:"asset"`
+	Pseudonym             string      `json:"pseudonym"`
+	Amount                json.Number `json:"amount"`
+	DisplayUsernamePublic bool        `json:"displayUsernamePublic"`
+	OutcomeIndex          int         `json:"outcomeIndex"`
+	Name                  string      `json:"name"`
+	ProfileImage          string      `json:"profileImage"`
+	ProfileImageOptimized string      `json:"profileImageOptimized"`
+	Verified              bool        `json:"verified"`
 }
 
 // TokenHolders is the top holders of one outcome token: GET /holders returns
@@ -519,22 +527,22 @@ func (c *Client) Holders(ctx context.Context, p HoldersParams) ([]TokenHolders, 
 // has. That asymmetry is the live API's own field naming, not a transcription
 // slip: the two endpoints simply chose different spellings.
 type MarketPosition struct {
-	ProxyWallet  string  `json:"proxyWallet"`
-	Name         string  `json:"name"`
-	ProfileImage string  `json:"profileImage"`
-	Verified     bool    `json:"verified"`
-	Asset        string  `json:"asset"`
-	ConditionID  string  `json:"conditionId"`
-	AvgPrice     float64 `json:"avgPrice"`
-	Size         float64 `json:"size"`
-	CurrPrice    float64 `json:"currPrice"`
-	CurrentValue float64 `json:"currentValue"`
-	CashPnl      float64 `json:"cashPnl"`
-	TotalBought  float64 `json:"totalBought"`
-	RealizedPnl  float64 `json:"realizedPnl"`
-	TotalPnl     float64 `json:"totalPnl"`
-	Outcome      string  `json:"outcome"`
-	OutcomeIndex int     `json:"outcomeIndex"`
+	ProxyWallet  string      `json:"proxyWallet"`
+	Name         string      `json:"name"`
+	ProfileImage string      `json:"profileImage"`
+	Verified     bool        `json:"verified"`
+	Asset        string      `json:"asset"`
+	ConditionID  string      `json:"conditionId"`
+	AvgPrice     json.Number `json:"avgPrice"`
+	Size         json.Number `json:"size"`
+	CurrPrice    json.Number `json:"currPrice"`
+	CurrentValue json.Number `json:"currentValue"`
+	CashPnl      json.Number `json:"cashPnl"`
+	TotalBought  json.Number `json:"totalBought"`
+	RealizedPnl  json.Number `json:"realizedPnl"`
+	TotalPnl     json.Number `json:"totalPnl"`
+	Outcome      string      `json:"outcome"`
+	OutcomeIndex int         `json:"outcomeIndex"`
 }
 
 // TokenMarketPositions groups every wallet's position in one outcome token:
@@ -589,8 +597,8 @@ func (c *Client) MarketPositions(ctx context.Context, p MarketPositionsParams) (
 // A PortfolioValue is the total mark-to-market USD value of a wallet's open
 // positions, as reported by GET /value.
 type PortfolioValue struct {
-	User  string  `json:"user"`
-	Value float64 `json:"value"`
+	User  string      `json:"user"`
+	Value json.Number `json:"value"`
 }
 
 // Value reports the total mark-to-market USD value of a wallet's open
@@ -632,8 +640,8 @@ func (c *Client) TradedCount(ctx context.Context, user string) (Traded, error) {
 
 // OpenInterest is one market's open interest in USD, as reported by GET /oi.
 type OpenInterest struct {
-	Market string  `json:"market"`
-	Value  float64 `json:"value"`
+	Market string      `json:"market"`
+	Value  json.Number `json:"value"`
 }
 
 // OpenInterest reports open interest for one or more markets, or, with market
@@ -652,21 +660,23 @@ func (c *Client) OpenInterest(ctx context.Context, market []string) ([]OpenInter
 
 // MarketVolume is one market's share of an event's live trading volume.
 type MarketVolume struct {
-	Market string  `json:"market"`
-	Value  float64 `json:"value"`
+	Market string      `json:"market"`
+	Value  json.Number `json:"value"`
 }
 
 // LiveVolume is an event's live trading volume, broken down per market within
 // it, as reported by GET /live-volume.
 type LiveVolume struct {
-	Total   float64        `json:"total"`
+	Total   json.Number    `json:"total"`
 	Markets []MarketVolume `json:"markets"`
 }
 
 // LiveVolume reports live trading volume for one event, broken down per
 // market within it. The endpoint always answers with exactly one result, even
-// for an id with no volume (Total 0, Markets empty) — it does not use an
-// empty response to signal an unknown event id. It needs no authentication.
+// for an id with no volume (Total "0", Markets empty) — it does not use an
+// empty response to signal an unknown event id. A response carrying no result
+// at all falls back to the zero LiveVolume, whose Total is the empty string
+// rather than "0". It needs no authentication.
 //
 // GET /live-volume
 func (c *Client) LiveVolume(ctx context.Context, eventID int64) (LiveVolume, error) {
@@ -688,9 +698,9 @@ func (c *Client) LiveVolume(ctx context.Context, eventID int64) (LiveVolume, err
 // internal in the OpenAPI spec (excluded from the public docs nav) but is
 // live and answers real requests.
 type OtherSize struct {
-	ID   int64   `json:"id"`
-	User string  `json:"user"`
-	Size float64 `json:"size"`
+	ID   int64       `json:"id"`
+	User string      `json:"user"`
+	Size json.Number `json:"size"`
 }
 
 // OtherSizes reports the size of the "Other" outcome bucket a wallet holds in
@@ -747,14 +757,14 @@ const (
 // A TraderLeaderboardEntry is one trader's rank on GET /v1/leaderboard.
 type TraderLeaderboardEntry struct {
 	// Rank is a decimal string, such as "1", not a JSON number.
-	Rank          string  `json:"rank"`
-	ProxyWallet   string  `json:"proxyWallet"`
-	UserName      string  `json:"userName"`
-	XUsername     string  `json:"xUsername"`
-	VerifiedBadge bool    `json:"verifiedBadge"`
-	Vol           float64 `json:"vol"`
-	Pnl           float64 `json:"pnl"`
-	ProfileImage  string  `json:"profileImage"`
+	Rank          string      `json:"rank"`
+	ProxyWallet   string      `json:"proxyWallet"`
+	UserName      string      `json:"userName"`
+	XUsername     string      `json:"xUsername"`
+	VerifiedBadge bool        `json:"verifiedBadge"`
+	Vol           json.Number `json:"vol"`
+	Pnl           json.Number `json:"pnl"`
+	ProfileImage  string      `json:"profileImage"`
 }
 
 // LeaderboardParams filters GET /v1/leaderboard.
@@ -808,11 +818,11 @@ type BuilderLeaderboardEntry struct {
 	Rank    string `json:"rank"`
 	Builder string `json:"builder"`
 	// BuilderCode is the onchain builder identifier, 0x + 64 hex.
-	BuilderCode string  `json:"builderCode"`
-	Volume      float64 `json:"volume"`
-	ActiveUsers int     `json:"activeUsers"`
-	Verified    bool    `json:"verified"`
-	BuilderLogo string  `json:"builderLogo"`
+	BuilderCode string      `json:"builderCode"`
+	Volume      json.Number `json:"volume"`
+	ActiveUsers int         `json:"activeUsers"`
+	Verified    bool        `json:"verified"`
+	BuilderLogo string      `json:"builderLogo"`
 }
 
 // BuilderLeaderboardParams filters GET /v1/builders/leaderboard.
@@ -847,13 +857,13 @@ func (c *Client) BuilderLeaderboard(ctx context.Context, p BuilderLeaderboardPar
 // as reported by GET /v1/builders/volume.
 type BuilderVolumeEntry struct {
 	// Date is the day this row covers, RFC3339 UTC (the wire key is "dt").
-	Date        string  `json:"dt"`
-	Builder     string  `json:"builder"`
-	BuilderCode string  `json:"builderCode"`
-	BuilderLogo string  `json:"builderLogo"`
-	Verified    bool    `json:"verified"`
-	Volume      float64 `json:"volume"`
-	ActiveUsers int     `json:"activeUsers"`
+	Date        string      `json:"dt"`
+	Builder     string      `json:"builder"`
+	BuilderCode string      `json:"builderCode"`
+	BuilderLogo string      `json:"builderLogo"`
+	Verified    bool        `json:"verified"`
+	Volume      json.Number `json:"volume"`
+	ActiveUsers int         `json:"activeUsers"`
 	// Rank is a decimal string, such as "1", not a JSON number.
 	Rank string `json:"rank"`
 }

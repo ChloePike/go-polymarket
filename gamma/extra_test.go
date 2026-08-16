@@ -83,6 +83,9 @@ func TestSeriesTranscription(t *testing.T) {
 	if s.Competitive != "0" {
 		t.Errorf("Competitive = %q, want string \"0\" (Series' asymmetry from Market)", s.Competitive)
 	}
+	if s.Volume24hr != json.Number("7943.585086") {
+		t.Errorf("Volume24hr = %q, want 7943.585086", s.Volume24hr)
+	}
 }
 
 func TestSeriesSummaryTranscription(t *testing.T) {
@@ -93,6 +96,14 @@ func TestSeriesSummaryTranscription(t *testing.T) {
 	}
 	if len(s.EventDates) != 2 || len(s.EventWeeks) != 3 {
 		t.Errorf("EventDates/EventWeeks lengths = %d/%d, want 2/3", len(s.EventDates), len(s.EventWeeks))
+	}
+	if s.Volume24hr != json.Number("11.073004") {
+		t.Errorf("Volume24hr = %q, want 11.073004", s.Volume24hr)
+	}
+	// The fixture omits volume, so it decodes to the empty json.Number —
+	// not "0", and not a number big.Rat will parse.
+	if s.Volume != "" {
+		t.Errorf("Volume = %q, want empty for an omitted amount", s.Volume)
 	}
 }
 
@@ -140,8 +151,8 @@ func TestPublicSearchResponseTranscription(t *testing.T) {
 func TestPublicProfileResponseTranscription(t *testing.T) {
 	var p PublicProfileResponse
 	decodeStrict(t, publicProfileJSON, &p)
-	if p.TakerTier != 2 || p.TakerTierName != "Silver" || p.WeightedVolume != 77546.069434 {
-		t.Errorf("taker tier fields = %d/%q/%v, want 2/Silver/77546.069434", p.TakerTier, p.TakerTierName, p.WeightedVolume)
+	if p.TakerTier != 2 || p.TakerTierName != "Silver" || p.WeightedVolume != json.Number("77546.069434") {
+		t.Errorf("taker tier fields = %d/%q/%q, want 2/Silver/77546.069434", p.TakerTier, p.TakerTierName, p.WeightedVolume)
 	}
 	if len(p.Users) != 1 || !p.Users[0].CommunityMod {
 		t.Errorf("Users = %+v", p.Users)

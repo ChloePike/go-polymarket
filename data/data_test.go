@@ -5,6 +5,8 @@ package data
 
 import (
 	"context"
+	"encoding/json"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -192,18 +194,18 @@ func TestPositionsDecode(t *testing.T) {
 		ProxyWallet:        "0x204f72f35326db932158cba6adff0b9a1da95e14",
 		Asset:              "99140635426353397249350183889599877135748112658097546731509034870452896140722",
 		ConditionID:        "0x408a4dcb6a03314bb13a1889a90aeca5fbf31bc20ca165056c514ae575924bd2",
-		Size:               162963.4451,
-		AvgPrice:           0.9979,
-		InitialValue:       162627.5391,
-		GrossInitialValue:  162644.036747,
-		EntryFeesUSDC:      16.49763,
-		CurrentValue:       155630.09,
-		CashPnl:            -6997.4491,
-		PercentPnl:         -4.3027,
-		TotalBought:        162963.4451,
-		RealizedPnl:        0,
-		PercentRealizedPnl: -4.3027,
-		CurPrice:           0.955,
+		Size:               "162963.4451",
+		AvgPrice:           "0.9979",
+		InitialValue:       "162627.5391",
+		GrossInitialValue:  "162644.036747",
+		EntryFeesUSDC:      "16.49763",
+		CurrentValue:       "155630.09",
+		CashPnl:            "-6997.4491",
+		PercentPnl:         "-4.3027",
+		TotalBought:        "162963.4451",
+		RealizedPnl:        "0",
+		PercentRealizedPnl: "-4.3027",
+		CurPrice:           "0.955",
 		Title:              "Tottenham Hotspur vs. TSG Hoffenheim: Tottenham Hotspur O/U 0.5",
 		Slug:               "clf-tot-tsg-2026-08-16-team-total-home-0pt5",
 		Icon:               "https://polymarket-upload.s3.us-east-2.amazonaws.com/soccer ball-bba4025f77.png",
@@ -216,6 +218,82 @@ func TestPositionsDecode(t *testing.T) {
 	}
 	if p != want {
 		t.Errorf("Positions()[0] = %+v, want %+v", p, want)
+	}
+}
+
+// exactCase is one decoded json.Number and the wire text it must still carry,
+// character for character.
+type exactCase struct {
+	field string
+	got   json.Number
+	want  string
+}
+
+// TestPositionsDecodeExact feeds the decoder values a float64 mishandles and
+// checks the text survives untouched. Each one breaks a different way:
+//
+//   - 0.29 has no exact binary form, so while it reprints as "0.29", any
+//     arithmetic on it drifts — 0.29*100 is 28.999999999999996 at runtime.
+//   - 1e-8 reprints as "1e-08" and 123456789.12345678 as
+//     1.2345678912345678e+08: the value survives, the text does not.
+//   - 0.070000000000000007 reprints as "0.07", silently losing digits the
+//     server sent.
+//
+// A size read here becomes a size signed on an order, so a value that changes
+// on the way through is a value that moves the wrong amount of money.
+func TestPositionsDecodeExact(t *testing.T) {
+	const body = `[{
+		"proxyWallet": "0x204f72f35326db932158cba6adff0b9a1da95e14",
+		"asset": "99140635426353397249350183889599877135748112658097546731509034870452896140722",
+		"size": 123456789.12345678,
+		"avgPrice": 0.29,
+		"initialValue": 1e-8,
+		"currentValue": 0.1000000000000000055511151231257827,
+		"cashPnl": -0.29,
+		"curPrice": 0.070000000000000007
+	}]`
+	c := dataServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(body))
+	})
+	got, err := c.Positions(context.Background(), PositionsParams{User: "0x204f..."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(got) = %d, want 1", len(got))
+	}
+	p := got[0]
+	cases := []exactCase{
+		{"Size", p.Size, "123456789.12345678"},
+		{"AvgPrice", p.AvgPrice, "0.29"},
+		{"InitialValue", p.InitialValue, "1e-8"},
+		{"CurrentValue", p.CurrentValue, "0.1000000000000000055511151231257827"},
+		{"CashPnl", p.CashPnl, "-0.29"},
+		{"CurPrice", p.CurPrice, "0.070000000000000007"},
+	}
+	for _, tc := range cases {
+		if tc.got.String() != tc.want {
+			t.Errorf("%s = %q, want %q", tc.field, tc.got, tc.want)
+		}
+	}
+
+	// The exact text is also exactly parseable: big.Rat takes it whole, where
+	// a float64 would already have rounded it.
+	avg, ok := new(big.Rat).SetString(p.AvgPrice.String())
+	if !ok {
+		t.Fatalf("big.Rat.SetString(%q) failed", p.AvgPrice)
+	}
+	if want := big.NewRat(29, 100); avg.Cmp(want) != 0 {
+		t.Errorf("AvgPrice as a Rat = %s, want %s", avg, want)
+	}
+
+	// A key the server never sent leaves the empty string, which is not a
+	// number: callers must check ok rather than read a silent zero.
+	if p.TotalBought != "" {
+		t.Errorf("TotalBought = %q, want the empty string for an absent key", p.TotalBought)
+	}
+	if _, ok := new(big.Rat).SetString(p.TotalBought.String()); ok {
+		t.Error("big.Rat.SetString accepted the empty string, want it rejected")
 	}
 }
 
@@ -260,7 +338,9 @@ func TestClosedPositions(t *testing.T) {
 		t.Fatalf("len(got) = %d, want 1", len(got))
 	}
 	cp := got[0]
-	if cp.RealizedPnl != 1156202.6574 || cp.OutcomeIndex != 1 || cp.Timestamp != 1782425635 || cp.CurPrice != 1 {
+	// The wire sends curPrice as the bare integer 1, so the exact text is "1",
+	// not "1.0" — json.Number reports what arrived, not a normalized form.
+	if cp.RealizedPnl != "1156202.6574" || cp.OutcomeIndex != 1 || cp.Timestamp != 1782425635 || cp.CurPrice != "1" {
 		t.Errorf("decoded ClosedPosition = %+v", cp)
 	}
 }
@@ -360,7 +440,7 @@ func TestFillsDecode(t *testing.T) {
 	if f.OutcomeIndex != 999 {
 		t.Errorf("OutcomeIndex = %d, want 999", f.OutcomeIndex)
 	}
-	if f.Size != 21 || f.Price != 0.16 || f.TransactionHash != "0xdb79d27479869fbbea544110dc4120a945774825369b1a321ec507c4b15a034d" {
+	if f.Size != "21" || f.Price != "0.16" || f.TransactionHash != "0xdb79d27479869fbbea544110dc4120a945774825369b1a321ec507c4b15a034d" {
 		t.Errorf("decoded Fill = %+v", f)
 	}
 }
@@ -462,7 +542,10 @@ func TestActivityDecode(t *testing.T) {
 	if a.Side != "" {
 		t.Errorf("Side = %q, want empty on a non-TRADE row", a.Side)
 	}
-	if a.Price != 0 || a.USDCSize != 0 || a.Size != 20 || a.Timestamp != 1786861677 {
+	// A non-TRADE row carries the number zero, not a missing field, so Price
+	// and USDCSize read "0" — distinct from the empty string a decoder leaves
+	// behind when the key is absent.
+	if a.Price != "0" || a.USDCSize != "0" || a.Size != "20" || a.Timestamp != 1786861677 {
 		t.Errorf("decoded Activity = %+v", a)
 	}
 }
@@ -508,7 +591,7 @@ func TestHolders(t *testing.T) {
 	if h.Verified {
 		t.Errorf("Verified = %v, want false", h.Verified)
 	}
-	if h.Amount != 162963.4451 || !h.DisplayUsernamePublic {
+	if h.Amount != "162963.4451" || !h.DisplayUsernamePublic {
 		t.Errorf("decoded Holder = %+v", h)
 	}
 }
@@ -559,10 +642,10 @@ func TestMarketPositions(t *testing.T) {
 		t.Fatalf("decoded TokenMarketPositions = %+v", got)
 	}
 	mp := got[0].Positions[0]
-	if mp.CurrPrice != 0.045 {
+	if mp.CurrPrice != "0.045" {
 		t.Errorf("CurrPrice = %v, want 0.045", mp.CurrPrice)
 	}
-	if mp.TotalPnl != 6960.1975 || mp.Name != "DwBh1" {
+	if mp.TotalPnl != "6960.1975" || mp.Name != "DwBh1" {
 		t.Errorf("decoded MarketPosition = %+v", mp)
 	}
 }
@@ -581,7 +664,7 @@ func TestValue(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkQuery(t, gotQuery, url.Values{"user": {"0x204f..."}, "market": {"0xm1,0xm2"}})
-	want := []PortfolioValue{{User: "0x204f72f35326db932158cba6adff0b9a1da95e14", Value: 451161.4413}}
+	want := []PortfolioValue{{User: "0x204f72f35326db932158cba6adff0b9a1da95e14", Value: "451161.4413"}}
 	if len(got) != 1 || got[0] != want[0] {
 		t.Errorf("Value() = %+v, want %+v", got, want)
 	}
@@ -621,7 +704,7 @@ func TestOpenInterest(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkQuery(t, gotQuery, url.Values{"market": {"0x408a..."}})
-	if len(got) != 1 || got[0].Value != 167381.403083 {
+	if len(got) != 1 || got[0].Value != "167381.403083" {
 		t.Errorf("OpenInterest() = %+v", got)
 	}
 }
@@ -643,10 +726,10 @@ func TestLiveVolume(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkQuery(t, gotQuery, url.Values{"id": {"795581"}})
-	if got.Total != 281682.5565499999 || len(got.Markets) != 2 {
+	if got.Total != "281682.5565499999" || len(got.Markets) != 2 {
 		t.Fatalf("LiveVolume() = %+v", got)
 	}
-	if got.Markets[0].Value != 167526.646935 {
+	if got.Markets[0].Value != "167526.646935" {
 		t.Errorf("Markets[0] = %+v", got.Markets[0])
 	}
 }
@@ -664,7 +747,10 @@ func TestLiveVolumeEmptyResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Total != 0 || len(got.Markets) != 0 {
+	// Nothing decoded, so Total is the zero json.Number — the empty string,
+	// not "0". A server that really reports zero volume sends "0", and the two
+	// cases stay distinguishable.
+	if got.Total != "" || len(got.Markets) != 0 {
 		t.Errorf("LiveVolume() = %+v, want the zero value", got)
 	}
 }
@@ -687,7 +773,7 @@ func TestOtherSizes(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkQuery(t, gotQuery, url.Values{"id": {"795581"}, "user": {"0x204f..."}})
-	want := OtherSize{ID: 795581, User: "0x204f72f35326db932158cba6adff0b9a1da95e14", Size: 12.5}
+	want := OtherSize{ID: 795581, User: "0x204f72f35326db932158cba6adff0b9a1da95e14", Size: "12.5"}
 	if len(got) != 1 || got[0] != want {
 		t.Errorf("OtherSizes() = %+v, want [%+v]", got, want)
 	}
@@ -763,7 +849,7 @@ func TestLeaderboardDecode(t *testing.T) {
 	}
 	e := got[0]
 	// rank is a decimal string on the wire, not a JSON number.
-	if e.Rank != "1" || e.UserName != "swisstony" || e.Vol != 1803373946.6578584 {
+	if e.Rank != "1" || e.UserName != "swisstony" || e.Vol != "1803373946.6578584" {
 		t.Errorf("decoded TraderLeaderboardEntry = %+v", e)
 	}
 }
@@ -800,6 +886,12 @@ func TestBuilderLeaderboard(t *testing.T) {
 	if e.BuilderCode != "0x6b0e773fada0a2ec67c956b25a737d353a534ea33db56c717ba7854346c67984" {
 		t.Errorf("BuilderCode = %q", e.BuilderCode)
 	}
+	// 1637556.2775469997 needs 17 significant digits; a float64 round trip
+	// reprints it as 1.6375562775469997e+06, so asserting the text also
+	// asserts that nothing reformatted it.
+	if e.Volume != "1637556.2775469997" {
+		t.Errorf("Volume = %q, want 1637556.2775469997", e.Volume)
+	}
 	if e.Builder != "traderline" || e.ActiveUsers != 86 || !e.Verified {
 		t.Errorf("decoded BuilderLeaderboardEntry = %+v", e)
 	}
@@ -829,7 +921,7 @@ func TestBuilderVolume(t *testing.T) {
 	if got[0].Date != "2026-08-16T00:00:00Z" || got[0].Rank != "1" {
 		t.Errorf("got[0] = %+v", got[0])
 	}
-	if got[1].Builder != "betmoar" || got[1].Volume != 1218045.791132 {
+	if got[1].Builder != "betmoar" || got[1].Volume != "1218045.791132" {
 		t.Errorf("got[1] = %+v", got[1])
 	}
 }

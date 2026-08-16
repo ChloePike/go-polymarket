@@ -140,6 +140,19 @@ is a signed commitment to the wrong number.
 
 - Never format a price through `float64`. `strconv.FormatFloat(0.29*100, ...)`
   is how a desk ends up quoting 28.999999999999996.
+- **Responses carry money as `json.Number`, and its kind is string.** That is
+  deliberate — it keeps the server's exact text — but it means `>` compiles
+  and compares lexicographically, so `"9.5"` sorts above `"10000.0"`. Parse
+  before you compare or add:
+
+  ```go
+  size, err := polymarket.ParseAmount(string(position.Size))
+  ```
+
+  `ParseAmount` refuses the fraction and hex-float forms `big.Rat.SetString`
+  would otherwise accept, and refuses empty text: a number the server omitted
+  or sent as null decodes to the empty `json.Number`, and "not reported" is
+  not "zero".
 - The tick size decides the rounding, and it varies per market. `CreateOrder`
   fetches it; if you cache it, cache it per token.
 - Below `min_order_size` the exchange refuses the order. It is on the book
