@@ -38,6 +38,53 @@ signature. A host whose clock has drifted gets 401s that look like bad
 credentials. `Client.Time` returns the exchange's clock; compare against it at
 start-up and alert on a skew of more than a few seconds.
 
+## Your account is probably not your key
+
+This is the first thing to get right, because getting it wrong produces an
+order that is signed correctly and rejected — or worse, accepted against an
+account with nothing in it.
+
+Polymarket gives most accounts a smart contract that holds the funds. The key
+only authorises it. An account made with Google or an email link gets a proxy
+wallet, one made by connecting MetaMask gets a Gnosis Safe, and everything
+made since May 2026 gets a deposit wallet. The address on your dashboard is
+that contract's, not your key's.
+
+Derive it rather than pasting it, and let the wallet fill in the order:
+
+```go
+wallet, err := polymarket.NewWallet(polymarket.SigEIP1271, key.Address(), polymarket.ChainPolygon)
+
+opts := wallet.OrderOptions()   // signature type and funder, which must agree
+opts.TickSize = tickSize
+order, err := polymarket.BuildOrder(user, key.Address(), opts)
+```
+
+Two fields decide this and they have to match: `SignatureType` tells the
+exchange which verification path to take, and `Funder` tells it whose balance
+to spend. `Wallet.OrderOptions` sets both. Setting one by hand and forgetting
+the other is the common way to lose an afternoon.
+
+`go run ./examples/wallets -owner 0x…` prints every form for a key, which is
+deployed, and what each holds. If you are unsure which account you have, start
+there.
+
+**An older account may be at a different address.** Deposit wallets created
+before the June 2026 upgrade sit at a pre-upgrade address;
+`DeriveDepositWalletUUPS` derives that one. The relayer's `Deployed` will tell
+you which exists.
+
+**A contract wallet's order signature is not 65 bytes.** It is a wrapped
+ERC-7739 blob, and `SignOrder` produces it automatically for `SigEIP1271`. If
+you log signature lengths, or validate them, allow for it.
+
+**Approvals and transfers go through the relayer, not through you.** A smart
+wallet holds no gas. `relayer.BuildWalletBatch` and its siblings sign what the
+wallet should do; `relayer.Submit` hands it to Polymarket to pay for and send.
+That call spends money and cannot be taken back, and the relayer answers with
+an id rather than a result — poll `relayer.Client.Transaction` until the state
+is terminal rather than assuming the queue means success.
+
 ## Read the stream, not the endpoint
 
 Polling `/book` in a loop is the most common way to be both slow and rate

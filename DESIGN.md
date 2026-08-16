@@ -10,19 +10,23 @@ protocol facts, not copied source: this is a clean-room implementation.
 
 ## Shape
 
-Polymarket is four services, so this is four client packages over one shared
+Polymarket is six services, so this is six client packages over one shared
 foundation. A caller importing `gamma` never compiles a line of trading code.
 
 ```
 polymarket/          the foundation, no endpoints
   session.go     Session, Option, Request, AuthLevel, Do and its helpers
-  errors.go      Error, ErrNoSigner, ErrNoCredentials
-  signer.go      Signer, PrivateKey, address derivation, EIP-55
+  errors.go      Error, ErrNoSigner, ErrNoCredentials, Indeterminate
+  signer.go      Signer, PrivateKey, address derivation, EIP-55, EIP-191
   auth.go        APICreds, level-1 EIP-712 headers, level-2 HMAC headers
+  typeddata.go   TypedData, the EIP-712 encoder, TypedDataSigner
   order.go       order types, BuildOrder, BuildMarketOrder, digest, signing
+  wallet.go      the account forms and their CREATE2 derivations
+  erc7739.go     the wrapped signature a contract wallet's order carries
   protocol.go    hosts, chains, contracts, EIP-712 domains, decimals
   internal/eip712/   Keccak-256, typed-data encoding, domain separator
   internal/amount/   exact price/size to maker/taker conversion
+  internal/abi/      Solidity ABI encoding, CREATE2
 
 clob/                the order book and everything that needs a signature
   client.go      Client, New, NewWithSession, the shared options
@@ -39,6 +43,14 @@ gamma/               market and event metadata, no authentication
   extra.go       series, tags, comments, search, profiles, sports
 
 data/                positions, activity, holders, no authentication
+
+bridge/              deposits and withdrawals across chains, no authentication
+
+relayer/             gasless transactions for a smart wallet
+  client.go      Client, its own option type, both credential schemes
+  relayer.go     nonces, relay payloads, transactions, deployment state
+  transaction.go the Safe, proxy and deposit-wallet meta-transactions
+
 ws/                  market, user and live-data streams
 ratelimit.go         the published limits for every host, and the pacing
 
@@ -64,7 +76,13 @@ wallet and an `http.Client`.
 | `https://clob.polymarket.com` | order book, orders, trades, rewards, auth | none / L1 / L2 |
 | `https://gamma-api.polymarket.com` | market and event metadata | none |
 | `https://data-api.polymarket.com` | positions, activity, holders, value | none |
+| `https://bridge.polymarket.com` | deposits and withdrawals across chains | none |
+| `https://relayer-v2.polymarket.com` | gasless transactions for a smart wallet | none / API key / builder HMAC |
 | `wss://ws-subscriptions-clob.polymarket.com/ws` | market and user streams | none / L2 |
+
+The relayer serves no specification of its own; the authoritative one is
+`https://docs.polymarket.com/api-spec/relayer-openapi.yaml`. Its per-wallet
+relay address changes over time, so it must be fetched rather than cached.
 
 ## Dependencies
 
@@ -131,6 +149,90 @@ it as a JSON *number*. A parser reading it as float64 loses precision above
 2^53, so the exchange verifies a different struct than the one signed and
 rejects the order, intermittently and only for large salts. `randomSalt` draws
 below 2^52.
+
+### Account forms
+
+A Polymarket account is usually not the key that signs for it. The key
+authorises a smart contract, the contract holds the funds, and the address on
+polymarket.com is the contract's. An order names the contract as `maker`; the
+`signer` field and the `signatureType` say how the exchange should verify it.
+
+| `signatureType` | Form | Created by | `maker` | `signer` |
+|---|---|---|---|---|
+| 0 | EOA | a key trading for itself | the key | the key |
+| 1 | Polymarket proxy | Magic Link or Google sign-in | the proxy | the key |
+| 2 | Gnosis Safe | MetaMask or another external signer | the Safe | the key |
+| 3 | deposit wallet | everything created since May 2026 | the wallet | **the wallet** |
+
+Slot 3 is `POLY_1271` in the CLOB's own enumeration and `DEPOSIT_WALLET` in
+the wallet documentation. They are the same slot: a deposit wallet is a
+contract that verifies through EIP-1271. Note the last column — for that form
+alone the `signer` field names the wallet, not the key, and the key that
+produced the bytes appears nowhere in the order.
+
+Every wallet is deployed with CREATE2, so its address is fixed by its owner
+and derivable offline.
+
+| Form | Factory (Polygon) | Salt | Init code hash |
+|---|---|---|---|
+| proxy | `0xaB45c5A4B0c941a2F231C04C3f49182e1A254052` | `keccak256(owner)`, twenty raw bytes | `0xd21df8dc…a00b` |
+| Safe | `0xaacFeEa03eb1561C4e67d661e40682Bd20E3541b` | `keccak256(abi.encode(owner))`, padded to a word | `0x2bce2127…cecf` |
+| deposit | `0x00000000000Fb5C9ADea0298D729A0CB3823Cc07` | `keccak256(abi.encode(factory, bytes32(owner)))` | Solady `LibClone`, per era |
+
+The two legacy salts differ, and the difference is invisible: both produce
+well-formed addresses for the same owner, and they are not the same address.
+Deposit wallets have two eras — a beacon proxy since the June 2026 upgrade
+(beacon `0x7A18EDfe…ffc3a`) and a direct implementation before it
+(`0x58CA52eb…Db1eB`) — which also derive different addresses, so an older
+account is unreachable through the current derivation.
+
+The proxy factory was never deployed on Amoy.
+
+### The wrapped order signature (ERC-7739)
+
+A deposit wallet holds no key, so it cannot sign; the exchange asks it to
+verify instead. Polymarket wraps the order in ERC-7739 so that a signature
+made for one wallet cannot be replayed into another. The owner signs
+
+```
+TypedDataSign(Order contents,string name,string version,uint256 chainId,address verifyingContract,bytes32 salt)Order(…)
+```
+
+and what reaches the exchange is 317 bytes, not 65:
+
+```
+innerSig(65) ‖ appDomainSeparator(32) ‖ contentsHash(32) ‖ orderTypeString ‖ len(orderTypeString)(2)
+```
+
+**The nesting is inverted from the ERC's own text and that is deliberate.**
+The inner signature is made against the *exchange's* domain, while the
+*wallet's* domain travels as message fields — `name` is `"DepositWallet"`,
+`version` is `"1"`, `verifyingContract` is the wallet, `salt` is zero. An
+implementation corrected toward the specification produces signatures the
+exchange refuses.
+
+### Relayer meta-transactions
+
+A smart wallet cannot pay gas, so the relayer sends its transactions. Three
+wallets, three unrelated things to sign:
+
+| Form | Signs | Domain | Then |
+|---|---|---|---|
+| Safe | `SafeTx(…)`, EIP-712 | **chainId and verifyingContract only** — no name, no version | EIP-191 personal sign, `v += 4` |
+| proxy | `keccak256("rlx:" ‖ from ‖ to ‖ data ‖ fee ‖ gasPrice ‖ gasLimit ‖ nonce ‖ relayHub ‖ relay)` | none; not typed data | EIP-191 personal sign, `v` unchanged |
+| deposit | `Batch(address wallet,uint256 nonce,uint256 deadline,Call[] calls)` | `DepositWallet` / `1` / the wallet | ordinary EIP-712 |
+
+The EIP-191 step is the trap. Signing the EIP-712 digest directly produces a
+well-formed signature that the relayer accepts and the wallet recovers to a
+stranger; the failure appears on chain with nothing local to catch it. The
+Safe's `v += 4` is how a Safe is told the digest was prefixed — leave it at 27
+and the Safe recovers from the wrong hash.
+
+A Safe performing several calls delegate-calls the multisend contract, which
+changes the target, the calldata and the operation code, all three of which
+are signed. A proxy needs no second contract: its factory takes an array of
+calls directly, and its operation codes count from one because zero means
+invalid, where a Safe's count from zero.
 
 ### Level-1 authentication (ClobAuth)
 
@@ -227,6 +329,17 @@ with a fixed salt, a fixed timestamp and the public Hardhat development key.
 | market-order amounts | 36 |
 | key-to-address derivations | 4 |
 | EIP-712 type hashes | 2 |
+| wrapped contract-wallet order signatures (ERC-7739) | 3 |
+| wallet derivations (proxy, Safe, deposit UUPS and beacon) | 18 |
+| relayer meta-transactions (Safe single and batched, proxy, deposit batch of 0, 1 and 2 calls) | 6 |
+| relayer calldata (multisend packing, proxy call arrays) | 3 |
+
+The relayer and wallet vectors come from a second generator,
+`testdata/gen-relayer-vectors.mjs`, because they are the output of a
+different SDK. The beacon deposit-wallet derivation is pinned against
+`py-builder-relayer-client` rather than the TypeScript one — no npm release
+of the latter exports it, and agreeing with an implementation written in
+another language is the stronger check anyway.
 
 Regenerate:
 
@@ -250,20 +363,16 @@ Same inputs, identical bytes. That is the whole correctness story.
 | `typeddata.go` — the EIP-712 payload, `TypedDataSigner` | done, cross-checked against viem |
 | `auth.go` — level 1 and level 2 | done, verified against production |
 | `order.go` — build and sign, V1/V2/V3, limit and market | done, golden-pinned |
-| `session.go` — transport, retries, errors | done |
+| `wallet.go` — the four account forms and their derivations | done, pinned against two official clients |
+| `erc7739.go` — the wrapped order signature | done, golden-pinned |
+| `session.go` — transport, retries, headers, errors | done |
 | `ratelimit.go` — both published limiters | done |
 | `clob/` — 69 methods | done |
 | `gamma/` — 49 methods | done |
 | `data/` — 15 methods | done |
+| `bridge/` — 5 methods | done, reads live-verified |
+| `relayer/` — 6 reads, 3 transaction builders, submit | done, signing golden-pinned |
 | `ws/` — market, user, live data | done, live-verified |
-
-Not implemented, and deliberately so for now: the relayer
-(`https://relayer-v2.polymarket.com`) and the bridge
-(`https://bridge.polymarket.com`). Both hosts are real and their published
-rate limits are already in the table here, but they are on-chain-adjacent
-surfaces — gasless meta-transactions for a proxy or Safe wallet, and
-cross-chain funding — rather than parts of the order book. They need
-meta-transaction signing this client does not have.
 
 There is no public testnet. The official SDKs support chain 80002 (Amoy) with
 a full set of contract addresses, but no Polymarket-hosted Amoy CLOB exists:

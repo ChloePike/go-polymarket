@@ -13,7 +13,7 @@ vendored. **GPL-3.0-or-later.**
 
 ## One package per API
 
-Polymarket is four services, so this is four client packages over one shared
+Polymarket is six services, so this is six client packages over one shared
 foundation. Import only what you use.
 
 | Import | What it talks to | Auth |
@@ -21,6 +21,8 @@ foundation. Import only what you use.
 | `go-polymarket/clob` | the order book: markets, prices, orders, trades, rewards | none to trade-level |
 | `go-polymarket/gamma` | market and event metadata: titles, slugs, tags, resolution | none |
 | `go-polymarket/data` | portfolio and analytics: positions, activity, holders | none |
+| `go-polymarket/bridge` | deposits and withdrawals across thirteen chains | none |
+| `go-polymarket/relayer` | gasless transactions for a smart wallet | none to key |
 | `go-polymarket/ws` | live market and user streams | none to trade-level |
 | `go-polymarket` | the wallet, the order types, signing, and the shared session | — |
 
@@ -111,6 +113,19 @@ vector could have shown.
 **Writes are never retried.** Reads retry twice on a connection failure.
 Resending an order that may already have been received is how an account ends
 up holding a position it asked for once.
+
+**It knows which account you actually have.** A Polymarket account is usually
+not the key that signs for it: Google sign-in, MetaMask and a new account
+today each give a different smart contract, and that contract is what holds
+the money. This derives all of them from the key, offline, and signs each
+form's orders the way that form requires — including the wrapped ERC-7739
+signature a current deposit wallet needs, which is 317 bytes rather than 65
+and is nested the opposite way round from what the ERC's own text describes.
+
+```go
+wallet, err := polymarket.NewWallet(polymarket.SigEIP1271, owner, polymarket.ChainPolygon)
+opts := wallet.OrderOptions()   // sets both the signature type and the funder
+```
 
 **Three dependencies, all pure Go.** Keccak-256 from `x/crypto`, secp256k1
 from `decred` — the same library go-ethereum's own pure-Go path wraps — and
