@@ -113,11 +113,14 @@ from `decred` — the same library go-ethereum's own pure-Go path wraps — and
 ## Examples
 
 ```bash
-go run ./examples/book        # an order book, live
-go run ./examples/portfolio   # what a wallet holds
-go run ./examples/authcheck   # prove the signing stack against production
-go run ./examples/check-builder <code>
+go run ./examples/book         # an order book, live
+go run ./examples/watch        # stream one book and print every move
+go run ./examples/portfolio    # what a wallet holds
+go run ./examples/authcheck    # prove the signing stack against production
+go run ./examples/check-builder <builder-code>
 ```
+
+Every one runs with no arguments and no credentials.
 
 ## Safety
 

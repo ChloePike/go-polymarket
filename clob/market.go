@@ -6,8 +6,8 @@ package clob
 // This file implements the CLOB's read-only market-data endpoints: service
 // health, market and token metadata, order books, prices in their various
 // forms, and the marketable-price walk that feeds MarketOrder.Price. None of
-// it needs authentication, so the zero Client is enough to call any method
-// here.
+// it needs authentication, so a credential-less Client from New is enough to
+// call any method here.
 //
 // Every fractional or money-shaped field below is json.Number, never
 // float64, matching the convention rewards.go also follows: the wire sends
@@ -69,7 +69,7 @@ func cursorOrStart(cursor string) string {
 // page's NextCursor repeats CursorEnd or stops advancing; if get returns an
 // error, Pages yields it once, with a zero T, and stops.
 //
-//	for m, err := range polymarket.Pages(ctx, c.Markets) {
+//	for m, err := range clob.Pages(ctx, c.Markets) {
 //		if err != nil { ... }
 //	}
 func Pages[T any](ctx context.Context, get func(ctx context.Context, cursor string) ([]T, Pagination, error)) iter.Seq2[T, error] {
@@ -420,9 +420,9 @@ type BookParams struct {
 // Books fetches order books for several tokens in one round trip: no
 // authentication, POST /books. Despite being a POST, it only reads; the
 // verb is the API's choice, driven by the token list riding in the body
-// rather than the query string. It is called through c.do rather than
-// c.postL2, since postL2 would require level-2 credentials this endpoint
-// does not need.
+// rather than the query string. It is called through Session.Do rather than
+// Session.PostL2, since PostL2 would require level-2 credentials this
+// endpoint does not need.
 func (c *Client) Books(ctx context.Context, params []BookParams) ([]OrderBook, error) {
 	var out []OrderBook
 	err := c.session.Do(ctx, polymarket.Request{Method: http.MethodPost, Path: epBooks, Body: params, Out: &out})
