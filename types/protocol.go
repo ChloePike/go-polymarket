@@ -46,20 +46,20 @@ const OrderTypeString = "Order(uint256 salt,address maker,address signer," +
 
 // REST endpoints (paths appended to host).
 const (
-	EPCreateAPIKey   = "/auth/api-key"
-	EPDeriveAPIKey   = "/auth/derive-api-key"
-	EPPostOrder      = "/order"
-	EPPostOrders     = "/orders"
-	EPCancelOrder    = "/order"
-	EPGetOrder       = "/data/order/"
-	EPOpenOrders     = "/data/orders"
-	EPBook           = "/book"
-	EPTickSize       = "/tick-size"
-	EPNegRisk        = "/neg-risk"
-	EPFeeRate        = "/fee-rate"
-	EPBuilderFees    = "/fees/builder-fees/"
-	EPBuilderTrades  = "/builder/trades"
-	EPServerTime     = "/time"
+	EPCreateAPIKey  = "/auth/api-key"
+	EPDeriveAPIKey  = "/auth/derive-api-key"
+	EPPostOrder     = "/order"
+	EPPostOrders    = "/orders"
+	EPCancelOrder   = "/order"
+	EPGetOrder      = "/data/order/"
+	EPOpenOrders    = "/data/orders"
+	EPBook          = "/book"
+	EPTickSize      = "/tick-size"
+	EPNegRisk       = "/neg-risk"
+	EPFeeRate       = "/fee-rate"
+	EPBuilderFees   = "/fees/builder-fees/"
+	EPBuilderTrades = "/builder/trades"
+	EPServerTime    = "/time"
 )
 
 // RoundConfig gives the decimal-place limits keyed by a market's tick size.

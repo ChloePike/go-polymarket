@@ -9,11 +9,11 @@ package types
 // integer here (not a string) and the L2 HMAC is computed over the marshalled
 // form of this struct — so field presence/order must stay stable.
 type PostOrderRequest struct {
-	DeferExec bool          `json:"deferExec"`
-	PostOnly  bool          `json:"postOnly"`
-	Order     WireOrder     `json:"order"`
-	Owner     string        `json:"owner"`     // the L2 API key
-	OrderType OrderType     `json:"orderType"`
+	DeferExec bool      `json:"deferExec"`
+	PostOnly  bool      `json:"postOnly"`
+	Order     WireOrder `json:"order"`
+	Owner     string    `json:"owner"` // the L2 API key
+	OrderType OrderType `json:"orderType"`
 }
 
 // WireOrder is the `order` object inside PostOrderRequest.
@@ -46,10 +46,10 @@ type PostOrderResponse struct {
 
 // BuilderFeeRates is the response of GET /fees/builder-fees/{code}.
 type BuilderFeeRates struct {
-	Code                    string `json:"code"`
-	BuilderMakerFeeRateBps  int    `json:"builder_maker_fee_rate_bps"`
-	BuilderTakerFeeRateBps  int    `json:"builder_taker_fee_rate_bps"`
-	Enabled                 bool   `json:"enabled"`
+	Code                   string `json:"code"`
+	BuilderMakerFeeRateBps int    `json:"builder_maker_fee_rate_bps"`
+	BuilderTakerFeeRateBps int    `json:"builder_taker_fee_rate_bps"`
+	Enabled                bool   `json:"enabled"`
 }
 
 // BuilderTrade is one attributed fill from GET /builder/trades.

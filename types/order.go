@@ -36,10 +36,10 @@ func (s Side) Uint8() uint8 {
 type SignatureType uint8
 
 const (
-	SigEOA           SignatureType = 0 // ECDSA EIP-712 by an EOA
-	SigPolyProxy     SignatureType = 1 // EOA that owns a Polymarket proxy wallet
-	SigPolyGnosis    SignatureType = 2 // EOA that owns a Polymarket Gnosis safe
-	SigPoly1271      SignatureType = 3 // EIP-1271 smart-contract wallet (deposit wallet)
+	SigEOA        SignatureType = 0 // ECDSA EIP-712 by an EOA
+	SigPolyProxy  SignatureType = 1 // EOA that owns a Polymarket proxy wallet
+	SigPolyGnosis SignatureType = 2 // EOA that owns a Polymarket Gnosis safe
+	SigPoly1271   SignatureType = 3 // EIP-1271 smart-contract wallet (deposit wallet)
 )
 
 // OrderType is the time-in-force / matching policy.
