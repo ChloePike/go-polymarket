@@ -1,45 +1,84 @@
 # go-polymarket
 
-A clean-room Go client for the **Polymarket CLOB V2** API. **V2-only, EOA**
-to start. **GPL-3.0-or-later.**
+A clean-room Go client for the [Polymarket](https://polymarket.com) APIs —
+the order book, market metadata, portfolio data and the streaming feeds.
 
 Not affiliated with Polymarket. Protocol details are transcribed from the
-public API / official TS SDK; no third-party client source is vendored.
+public API and the official TypeScript SDK; no third-party client source is
+vendored. **GPL-3.0-or-later.**
 
-## Status
-
-Read-only endpoints work today. Trading is wired but blocked on the EIP-712
-signing core (**M1**) — see [DESIGN.md](DESIGN.md).
-
-```
-go build ./...   # ok
-go vet ./...     # ok
-go test ./...    # ok  (order/ amount-math golden vectors pass)
+```go
+import "github.com/ChloePike/go-polymarket"
 ```
 
-## Try the read-only demo (no wallet, no keys)
+## Reading the market needs nothing
 
-```bash
-go run ./examples/check-builder 0x11adfa1337e1d4049b93be13548465015ac613efe3f8e7cee2347170f4ae5417
-# builder code : 0x11adfa…ae5417
-# enabled      : true
-# maker / taker: 0 / 0 bps
-# attributed trades: 0
+The zero `Client` is ready for every endpoint that takes no credentials.
+
+```go
+var c polymarket.Client
+
+book, err := c.OrderBook(ctx, tokenID)
+tick, err := c.TickSize(ctx, tokenID)
 ```
+
+## Trading needs a key
+
+```go
+key, err := polymarket.NewPrivateKey(os.Getenv("POLYMARKET_KEY"))
+c := &polymarket.Client{Signer: key}
+
+// Level 1 proves you control the wallet and hands back level-2 credentials.
+creds, err := c.CreateOrDeriveAPIKey(ctx)
+
+// Everything after that is signed with those credentials.
+order, err := c.CreateOrder(ctx, polymarket.UserOrder{
+    TokenID: tokenID,
+    Price:   "0.52",
+    Size:    "100",
+    Side:    polymarket.Buy,
+}, polymarket.OrderOptions{})
+resp, err := c.PostOrder(ctx, order, polymarket.GTC)
+```
+
+`CreateOrder` looks up the market's tick size and neg-risk flag, sizes the
+order, and signs it. Signing an order authorises a trade, so the client checks
+what it can — price inside the tradable band, token id well formed, amounts
+exactly representable — before signing rather than after.
+
+## What makes this client careful
+
+**Exact money math.** Prices and sizes are decimal strings and the integer
+amounts an order carries are computed with `math/big.Rat`. The official SDK
+does this arithmetic in `float64`; a 2520-point grid captured from that SDK
+agrees with this implementation on every point, so exactness costs nothing.
+
+**Byte-identical signatures.** `testdata/vectors.json` holds order digests,
+signatures, authentication payloads and amounts produced by
+`@polymarket/clob-client-v2`. The test suite asserts this client reproduces
+them exactly. Same inputs, same bytes.
+
+**Three dependencies, all pure Go.** Keccak-256 from `x/crypto`, secp256k1 from
+`decred` — the same library go-ethereum's own pure-Go path wraps — and
+`coder/websocket`. No cgo, no 140-module dependency tree.
 
 ## Packages
 
-| Package | Purpose |
+| Import | Purpose |
 |---|---|
-| `types` | Order/wire types + all protocol constants (contracts, domains, endpoints, rounding) |
-| `sign`  | L2 HMAC (done); order + ClobAuth EIP-712 (M1) |
-| `order` | price/size → maker/taker integer amounts (big.Rat), order assembly |
-| `client`| REST — read endpoints done; auth + PostOrder wired |
+| `github.com/ChloePike/go-polymarket` | the client: markets, orders, trades, rewards, metadata, portfolio |
+| `github.com/ChloePike/go-polymarket/ws` | market and user streams |
 
-## Roadmap
+## Safety
 
-M1 signing → M2 reads (done) → M3 trade loop → M4 builder attribution →
-M5 websockets. Details and the full protocol reference: **[DESIGN.md](DESIGN.md)**.
+Trading moves real money. The examples in this repository are read-only unless
+they say otherwise, and no test touches the live network. Keep your key in the
+environment, never in a source file.
+
+## Documentation
+
+Protocol reference, the traps worth knowing, and the milestone status:
+**[DESIGN.md](DESIGN.md)**.
 
 ## License
 
