@@ -41,7 +41,10 @@ const (
 	SigPolyProxy SignatureType = 1
 	// SigPolyGnosisSafe is an EOA signing for its Polymarket Gnosis Safe.
 	SigPolyGnosisSafe SignatureType = 2
-	// SigEIP1271 is a contract wallet verifying through EIP-1271.
+	// SigEIP1271 is a contract wallet verifying through EIP-1271. Every
+	// Polymarket account created since May 2026 is one of these — a deposit
+	// wallet — and its orders carry a wrapped signature rather than a plain
+	// one. See WrappedOrderTypedData.
 	SigEIP1271 SignatureType = 3
 )
 
@@ -305,9 +308,16 @@ func OrderDigest(o Order, chainID int64, opts OrderOptions) ([32]byte, error) {
 }
 
 // SignOrder signs an order for a chain and returns it with its signature.
+//
+// An order from a smart-contract wallet is signed differently: what the owner
+// signs wraps the order rather than being the order, and the result is longer
+// than a 65-byte signature. See WrappedOrderTypedData.
 func SignOrder(o Order, chainID int64, opts OrderOptions, s Signer) (SignedOrder, error) {
 	if s == nil {
 		return SignedOrder{}, fmt.Errorf("polymarket: SignOrder needs a Signer")
+	}
+	if o.SignatureType == SigEIP1271 {
+		return signWrappedOrder(o, chainID, opts, s)
 	}
 	td, err := OrderTypedData(o, chainID, opts)
 	if err != nil {

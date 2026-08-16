@@ -24,6 +24,19 @@ type goldenFile struct {
 	Orders     []goldenOrder    `json:"orders"`
 	ClobAuth   []goldenClobAuth `json:"clobAuth"`
 	HMAC       []goldenHMAC     `json:"hmac"`
+
+	// WalletOrders are orders made by a smart-contract wallet, whose
+	// signature wraps the order instead of covering it. They carry no digest:
+	// the exchange never hashes the order alone for these.
+	WalletOrders []goldenWalletOrder `json:"walletOrders"`
+}
+
+// goldenWalletOrder is one order signed on behalf of a contract wallet.
+type goldenWalletOrder struct {
+	Name      string            `json:"name"`
+	Input     goldenOrderInput  `json:"input"`
+	Order     goldenOrderFields `json:"order"`
+	Signature string            `json:"signature"`
 }
 
 // goldenAccount is a key and the address derived from it.
@@ -72,6 +85,10 @@ type goldenOrderInput struct {
 	TokenID     string `json:"tokenId"`
 	BuilderCode string `json:"builderCode"`
 	Expiration  string `json:"expiration"`
+
+	// Wallet is the contract wallet an order was made by, empty for the
+	// ordinary orders where the key is the account.
+	Wallet string `json:"wallet"`
 }
 
 // goldenDomain is the EIP-712 domain an order was signed under.

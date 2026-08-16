@@ -298,6 +298,61 @@ for (const tokenId of bookTokens) {
 	});
 }
 
+// ------------------------------------------------- smart-wallet orders
+
+// An order from a contract wallet is signed through ERC-7739: the owner signs
+// a struct that wraps the order rather than the order itself, and the
+// signature that reaches the exchange carries the domain separator, the
+// contents hash and the type string after it. None of that is 65 bytes, and
+// none of it appears in the vectors above.
+//
+// WALLET is a deposit wallet address. Which owner it belongs to does not
+// matter here — the derivation is pinned separately — only that the maker and
+// the signer are the wallet while the key that signs is the Hardhat account.
+const WALLET = "0x94bF330955A0b957662fEaF878dE77bf25f76cD9";
+
+const walletOrderCases = [
+	{ name: "buy_v2_contract_wallet", version: 2, negRisk: false, side: "BUY", price: 0.52, size: 100, tick: "0.01" },
+	{ name: "sell_v2_contract_wallet_negrisk", version: 2, negRisk: true, side: "SELL", price: 0.67, size: 3.33, tick: "0.001" },
+	{ name: "buy_v3_contract_wallet", version: 3, negRisk: false, side: "BUY", price: 0.41, size: 12.34, tick: "0.001" },
+];
+
+const walletOrders = [];
+for (const c of walletOrderCases) {
+	const rc = ROUNDING_CONFIG[c.tick];
+	const { side, rawMakerAmt, rawTakerAmt } = getOrderRawAmounts(c.side, c.size, c.price, rc);
+	const makerAmount = parseUnits(rawMakerAmt.toString(), 6).toString();
+	const takerAmount = parseUnits(rawTakerAmt.toString(), 6).toString();
+
+	const verifying = exchangeFor(c.version, c.negRisk);
+	const b = builderFor(c.version, verifying);
+	const signed = await b.buildSignedOrder({
+		maker: WALLET,
+		signer: WALLET,
+		tokenId: TOKEN,
+		makerAmount,
+		takerAmount,
+		side,
+		signatureType: 3,
+		timestamp: TS,
+		metadata: ZERO32,
+		builder: c.builder ?? ZERO32,
+		expiration: c.expiration ?? "0",
+	});
+
+	walletOrders.push({
+		name: c.name,
+		input: {
+			version: c.version, negRisk: c.negRisk, side: c.side,
+			price: String(c.price), size: String(c.size), tickSize: c.tick,
+			tokenId: TOKEN, wallet: WALLET,
+		},
+		order: signed,
+		wireJSON: orderToJsonV2(signed, "", "GTC"),
+		signature: signed.signature,
+	});
+}
+
 // --------------------------------------------------------------- accounts
 
 const accounts = [];
@@ -325,6 +380,7 @@ console.log(JSON.stringify({
 	roundingConfig: ROUNDING_CONFIG,
 	accounts,
 	orders,
+	walletOrders,
 	amounts: amountGrid,
 	marketOrders: marketCases,
 	clobAuth,

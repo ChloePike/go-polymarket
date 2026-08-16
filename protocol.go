@@ -41,6 +41,25 @@ type Contracts struct {
 	NegRiskAdapter    string
 	Collateral        string // USDC
 	ConditionalTokens string // ERC-1155 outcome tokens
+
+	// The wallet factories. Polymarket accounts are mostly not the key that
+	// signs for them: a smart wallet holds the funds and an ordinary key
+	// authorises it. Each factory deploys its wallets at an address derived
+	// from the owner, so the address is known before the wallet exists.
+	// See DeriveWallet.
+	ProxyFactory         string // POLY_PROXY, from Magic Link or Google sign-in
+	SafeFactory          string // POLY_GNOSIS_SAFE, from an external signer
+	SafeMultisend        string // batches several calls into one Safe transaction
+	RelayHub             string // the proxy relay a gasless proxy transaction names
+	DepositWalletFactory string // the current wallet, deployed since May 2026
+
+	// DepositWalletBeacon and DepositWalletImplementation are two eras of the
+	// same wallet. Wallets created after the June 2026 upgrade sit behind an
+	// ERC-1967 beacon; earlier ones point straight at an implementation. The
+	// two derive different addresses for the same owner, so the wrong one
+	// names a wallet that holds nothing.
+	DepositWalletBeacon         string
+	DepositWalletImplementation string
 }
 
 var (
@@ -53,6 +72,14 @@ var (
 		NegRiskAdapter:    "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296",
 		Collateral:        "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
 		ConditionalTokens: "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045",
+
+		ProxyFactory:                "0xaB45c5A4B0c941a2F231C04C3f49182e1A254052",
+		SafeFactory:                 "0xaacFeEa03eb1561C4e67d661e40682Bd20E3541b",
+		SafeMultisend:               "0xA238CBeb142c10Ef7Ad8442C6D1f9E89e07e7761",
+		RelayHub:                    "0xD216153c06E857cD7f72665E0aF1d7D82172F494",
+		DepositWalletFactory:        "0x00000000000Fb5C9ADea0298D729A0CB3823Cc07",
+		DepositWalletBeacon:         "0x7A18EDfe055488A3128f01F563e5B479D92ffc3a",
+		DepositWalletImplementation: "0x58CA52ebe0DadfdF531Cde7062e76746de4Db1eB",
 	}
 	amoyContracts = Contracts{
 		Exchange:          "0xdFE02Eb6733538f8Ea35D585af8DE5958AD99E40",
@@ -63,6 +90,15 @@ var (
 		NegRiskAdapter:    "0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296",
 		Collateral:        "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB",
 		ConditionalTokens: "0x69308FB512518e39F9b16112fA8d994F4e2Bf8bB",
+
+		// The proxy factory was never deployed on Amoy, so ProxyFactory and
+		// RelayHub stay empty and DeriveWallet refuses rather than computing
+		// an address for a factory that is not there.
+		SafeFactory:                 "0xaacFeEa03eb1561C4e67d661e40682Bd20E3541b",
+		SafeMultisend:               "0xA238CBeb142c10Ef7Ad8442C6D1f9E89e07e7761",
+		DepositWalletFactory:        "0x00000000000Fb5C9ADea0298D729A0CB3823Cc07",
+		DepositWalletBeacon:         "0x7A18EDfe055488A3128f01F563e5B479D92ffc3a",
+		DepositWalletImplementation: "0x50a88fE9a441cB4c9c2aD6A2207CE2795C7D7Fbd",
 	}
 )
 

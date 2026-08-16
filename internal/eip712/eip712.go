@@ -107,6 +107,34 @@ func String(s string) Word {
 	return Keccak256([]byte(s))
 }
 
+// Bytes encodes a dynamic bytes field, which EIP-712 hashes rather than pads.
+// Note the difference from Bytes32: that is an atomic type carried verbatim,
+// this is dynamic and hashed, and confusing the two changes the digest.
+func Bytes(b []byte) Word {
+	return Keccak256(b)
+}
+
+// HexBytes decodes a 0x-prefixed hex string of any length, the form calldata
+// and signatures arrive in.
+func HexBytes(s string) ([]byte, error) {
+	b, err := hex.DecodeString(strings.TrimPrefix(strings.TrimPrefix(s, "0x"), "0X"))
+	if err != nil {
+		return nil, fmt.Errorf("eip712: bad hex %q: %w", s, err)
+	}
+	return b, nil
+}
+
+// Array encodes an array field: keccak256 of its already-encoded elements
+// concatenated. Both fixed and dynamic arrays hash this way, and an empty
+// array hashes the empty string rather than being skipped.
+func Array(elements []Word) Word {
+	buf := make([]byte, 0, 32*len(elements))
+	for _, e := range elements {
+		buf = append(buf, e[:]...)
+	}
+	return Keccak256(buf)
+}
+
 // StructHash returns keccak256(typeHash ‖ field₀ ‖ … ‖ fieldₙ), the hashStruct
 // of EIP-712. Fields must be supplied in the order the type string declares.
 func StructHash(typeHash Word, fields ...Word) Word {
@@ -188,9 +216,16 @@ func (e *Encoder) StructHash(typeHash Word) (Word, error) {
 	return StructHash(typeHash, e.words...), nil
 }
 
-// A Domain is an EIP-712 domain. An empty VerifyingContract means the domain
-// omits that field entirely — the field is dropped from the type string, not
-// encoded as the zero address. Polymarket's ClobAuth domain relies on this.
+// A Domain is an EIP-712 domain. A field left at its zero value is omitted
+// entirely — dropped from the type string, not encoded as an empty string or a
+// zero address — because EIP-712 builds the type string from the fields a
+// domain actually has.
+//
+// Polymarket needs three shapes of this. The order domain carries all four
+// fields; the ClobAuth domain carries no verifying contract; a Gnosis Safe
+// transaction carries only the chain and the Safe's own address, with neither
+// a name nor a version. Encoding an absent field as a zero produces a
+// different separator, so every signature made against it is refused.
 type Domain struct {
 	Name              string
 	Version           string
@@ -200,23 +235,36 @@ type Domain struct {
 
 // Separator returns the domain separator, hashStruct(EIP712Domain).
 func (d Domain) Separator() (Word, error) {
-	chainID, err := Uint(d.ChainID)
-	if err != nil {
-		return Word{}, err
+	var (
+		names  []string
+		fields []Word
+	)
+	if d.Name != "" {
+		names = append(names, "string name")
+		fields = append(fields, String(d.Name))
 	}
-	fields := []Word{String(d.Name), String(d.Version), chainID}
-
-	typeString := "EIP712Domain(string name,string version,uint256 chainId"
+	if d.Version != "" {
+		names = append(names, "string version")
+		fields = append(fields, String(d.Version))
+	}
+	if d.ChainID != nil {
+		chainID, err := Uint(d.ChainID)
+		if err != nil {
+			return Word{}, err
+		}
+		names = append(names, "uint256 chainId")
+		fields = append(fields, chainID)
+	}
 	if d.VerifyingContract != "" {
-		typeString += ",address verifyingContract"
 		addr, err := Address(d.VerifyingContract)
 		if err != nil {
 			return Word{}, err
 		}
+		names = append(names, "address verifyingContract")
 		fields = append(fields, addr)
 	}
-	typeString += ")"
 
+	typeString := "EIP712Domain(" + strings.Join(names, ",") + ")"
 	return StructHash(TypeHash(typeString), fields...), nil
 }
 

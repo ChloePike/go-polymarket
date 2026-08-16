@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"reflect"
+	"sort"
+	"strings"
 
 	"github.com/ChloePike/go-polymarket/internal/eip712"
 )
@@ -33,12 +36,16 @@ type TypedDataField struct {
 }
 
 // A TypedDataDomain is the EIP-712 domain a signature is bound to. An empty
-// VerifyingContract means the domain omits the field entirely — it is absent
-// from the type string, not zeroed — which is what Polymarket's level-1
-// authentication domain does.
+// field means the domain omits it entirely — it is absent from the type
+// string, not zeroed.
+//
+// Polymarket relies on this twice. The level-1 authentication domain carries
+// no verifying contract, and a Gnosis Safe transaction carries neither a name
+// nor a version. Hashing an absent field as an empty string gives a different
+// separator and a signature nothing accepts.
 type TypedDataDomain struct {
-	Name              string `json:"name"`
-	Version           string `json:"version"`
+	Name              string `json:"name,omitempty"`
+	Version           string `json:"version,omitempty"`
 	ChainID           int64  `json:"chainId"`
 	VerifyingContract string `json:"verifyingContract,omitempty"`
 }
@@ -65,11 +72,14 @@ type TypedData struct {
 // hashing it as four fields with a zero address gives a different, wrong
 // separator.
 func (d TypedDataDomain) domainType() []TypedDataField {
-	fields := []TypedDataField{
-		{Name: "name", Type: "string"},
-		{Name: "version", Type: "string"},
-		{Name: "chainId", Type: "uint256"},
+	var fields []TypedDataField
+	if d.Name != "" {
+		fields = append(fields, TypedDataField{Name: "name", Type: "string"})
 	}
+	if d.Version != "" {
+		fields = append(fields, TypedDataField{Name: "version", Type: "string"})
+	}
+	fields = append(fields, TypedDataField{Name: "chainId", Type: "uint256"})
 	if d.VerifyingContract != "" {
 		fields = append(fields, TypedDataField{Name: "verifyingContract", Type: "address"})
 	}
@@ -94,16 +104,54 @@ func (td TypedData) DomainSeparator() ([32]byte, error) {
 	return sep, nil
 }
 
-// TypeString renders the EIP-712 type string for the primary type, the exact
-// text whose hash goes into hashStruct. It is worth logging next to a
+// TypeString renders the EIP-712 encodeType string for the primary type, the
+// exact text whose hash goes into hashStruct. It is worth logging next to a
 // signature: two payloads that differ only in their type string produce
 // different digests for identical-looking messages.
+//
+// A struct that refers to other structs carries their definitions too, sorted
+// by name after the primary one — the order EIP-712 fixes, not the order the
+// Types map happens to iterate in.
 func (td TypedData) TypeString() (string, error) {
-	fields, ok := td.Types[td.PrimaryType]
-	if !ok {
-		return "", fmt.Errorf("polymarket: typed data has no type %q", td.PrimaryType)
+	return td.encodeType(td.PrimaryType)
+}
+
+// encodeType is EIP-712 encodeType: the named struct, then every struct it
+// reaches, sorted by name.
+func (td TypedData) encodeType(name string) (string, error) {
+	referenced := make(map[string]bool)
+	if err := td.collectTypes(name, referenced); err != nil {
+		return "", err
 	}
-	s := td.PrimaryType + "("
+	delete(referenced, name)
+
+	names := make([]string, 0, len(referenced))
+	for n := range referenced {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+
+	s, err := td.typeSegment(name)
+	if err != nil {
+		return "", err
+	}
+	for _, n := range names {
+		segment, err := td.typeSegment(n)
+		if err != nil {
+			return "", err
+		}
+		s += segment
+	}
+	return s, nil
+}
+
+// typeSegment renders one struct as "Name(type field,type field)".
+func (td TypedData) typeSegment(name string) (string, error) {
+	fields, ok := td.Types[name]
+	if !ok {
+		return "", fmt.Errorf("polymarket: typed data has no type %q", name)
+	}
+	s := name + "("
 	for i, f := range fields {
 		if i > 0 {
 			s += ","
@@ -113,30 +161,132 @@ func (td TypedData) TypeString() (string, error) {
 	return s + ")", nil
 }
 
+// collectTypes walks the struct types name reaches, itself included.
+func (td TypedData) collectTypes(name string, found map[string]bool) error {
+	if found[name] {
+		return nil
+	}
+	fields, ok := td.Types[name]
+	if !ok {
+		return fmt.Errorf("polymarket: typed data has no type %q", name)
+	}
+	found[name] = true
+	for _, f := range fields {
+		base := elementType(f.Type)
+		if _, isStruct := td.Types[base]; isStruct {
+			if err := td.collectTypes(base, found); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // StructHash returns hashStruct(primaryType) over the message.
 func (td TypedData) StructHash() ([32]byte, error) {
-	fields, ok := td.Types[td.PrimaryType]
+	return td.hashStruct(td.PrimaryType, td.Message)
+}
+
+// hashStruct hashes one struct value against its declared type.
+func (td TypedData) hashStruct(name string, message map[string]any) ([32]byte, error) {
+	fields, ok := td.Types[name]
 	if !ok {
-		return [32]byte{}, fmt.Errorf("polymarket: typed data has no type %q", td.PrimaryType)
+		return [32]byte{}, fmt.Errorf("polymarket: typed data has no type %q", name)
 	}
-	typeString, err := td.TypeString()
+	typeString, err := td.encodeType(name)
 	if err != nil {
 		return [32]byte{}, err
 	}
 
 	var enc eip712.Encoder
 	for _, f := range fields {
-		value, ok := td.Message[f.Name]
+		value, ok := message[f.Name]
 		if !ok {
 			return [32]byte{}, fmt.Errorf("polymarket: typed data message has no field %q", f.Name)
 		}
-		word, err := encodeTypedValue(f.Type, value)
+		word, err := td.encodeValue(f.Type, value)
 		if err != nil {
 			return [32]byte{}, fmt.Errorf("polymarket: field %s: %w", f.Name, err)
 		}
 		enc.Word(f.Name, word)
 	}
 	return enc.StructHash(eip712.TypeHash(typeString))
+}
+
+// encodeValue encodes one message value as its declared type: a nested struct
+// by its own hashStruct, an array by the hash of its encoded elements, and
+// anything else atomically.
+func (td TypedData) encodeValue(solidityType string, value any) (eip712.Word, error) {
+	if element, isArray := arrayElement(solidityType); isArray {
+		items, err := valueSlice(value)
+		if err != nil {
+			return eip712.Word{}, err
+		}
+		words := make([]eip712.Word, len(items))
+		for i, item := range items {
+			if words[i], err = td.encodeValue(element, item); err != nil {
+				return eip712.Word{}, fmt.Errorf("element %d: %w", i, err)
+			}
+		}
+		return eip712.Array(words), nil
+	}
+	if _, isStruct := td.Types[solidityType]; isStruct {
+		message, err := valueMessage(value)
+		if err != nil {
+			return eip712.Word{}, err
+		}
+		return td.hashStruct(solidityType, message)
+	}
+	return encodeTypedValue(solidityType, value)
+}
+
+// arrayElement splits one array suffix off a type, reporting whether there was
+// one. Both "Call[]" and "uint256[3]" name an array; EIP-712 encodes them the
+// same way, as the hash of the concatenated elements.
+func arrayElement(solidityType string) (string, bool) {
+	if !strings.HasSuffix(solidityType, "]") {
+		return solidityType, false
+	}
+	open := strings.LastIndexByte(solidityType, '[')
+	if open < 0 {
+		return solidityType, false
+	}
+	return solidityType[:open], true
+}
+
+// elementType strips every array suffix, leaving the type an array is of.
+func elementType(solidityType string) string {
+	for {
+		base, isArray := arrayElement(solidityType)
+		if !isArray {
+			return base
+		}
+		solidityType = base
+	}
+}
+
+// valueSlice reads a value that must be a list. Reflection rather than a type
+// switch, because the elements may be any struct-shaped map or scalar and the
+// caller should not have to build a []any to be understood.
+func valueSlice(value any) ([]any, error) {
+	v := reflect.ValueOf(value)
+	if !v.IsValid() || (v.Kind() != reflect.Slice && v.Kind() != reflect.Array) {
+		return nil, fmt.Errorf("got %T, want a list", value)
+	}
+	items := make([]any, v.Len())
+	for i := range items {
+		items[i] = v.Index(i).Interface()
+	}
+	return items, nil
+}
+
+// valueMessage reads a value that must be a nested struct.
+func valueMessage(value any) (map[string]any, error) {
+	m, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("got %T, want a map[string]any", value)
+	}
+	return m, nil
 }
 
 // Digest returns the 32 bytes a signature covers:
@@ -185,6 +335,30 @@ func encodeTypedValue(solidityType string, value any) (eip712.Word, error) {
 			return eip712.Word{}, err
 		}
 		return eip712.String(s), nil
+
+	case "bytes":
+		// Dynamic, so hashed rather than padded — the opposite of bytes32
+		// above, which is atomic and carried verbatim. Calldata arrives as a
+		// hex string of arbitrary length.
+		s, err := typedString(value)
+		if err != nil {
+			return eip712.Word{}, err
+		}
+		b, err := eip712.HexBytes(s)
+		if err != nil {
+			return eip712.Word{}, err
+		}
+		return eip712.Bytes(b), nil
+
+	case "bool":
+		b, ok := value.(bool)
+		if !ok {
+			return eip712.Word{}, fmt.Errorf("got %T, want a bool", value)
+		}
+		if b {
+			return eip712.Uint8(1), nil
+		}
+		return eip712.Uint8(0), nil
 
 	case "uint8", "uint16", "uint32", "uint64", "uint128", "uint256":
 		n, err := typedUint(value)
