@@ -42,10 +42,18 @@ func TestWithURLReachesSomewhereElse(t *testing.T) {
 	}
 }
 
+// A defaultURLCase pairs one exported default-URL constant with the literal
+// production endpoint it must equal.
+type defaultURLCase struct {
+	name string
+	got  string
+	want string
+}
+
 // TestDefaultURLsAreProduction guards the constants a caller gets when they
 // pass no URL at all.
 func TestDefaultURLsAreProduction(t *testing.T) {
-	for _, tc := range []struct{ name, got, want string }{
+	for _, tc := range []defaultURLCase{
 		{"market", MarketURL, "wss://ws-subscriptions-clob.polymarket.com/ws/market"},
 		{"user", UserURL, "wss://ws-subscriptions-clob.polymarket.com/ws/user"},
 		{"rtds", RTDSURL, "wss://ws-live-data.polymarket.com"},

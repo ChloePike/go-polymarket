@@ -36,6 +36,9 @@ type goldenConfig struct {
 	Amount int `json:"amount"`
 }
 
+// goldenAmounts is the subset of testdata/vectors.json this package reads:
+// the limit- and market-order amount vectors plus the rounding table they are
+// computed against, keyed by tick size.
 type goldenAmounts struct {
 	Amounts        []goldenLimit           `json:"amounts"`
 	MarketOrders   []goldenMarket          `json:"marketOrders"`

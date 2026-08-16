@@ -33,6 +33,11 @@ type Session struct {
 	chainID    int64
 	userAgent  string
 	retries    int
+
+	limiter     Limiter
+	limiterSet  bool
+	tradingTier Tier
+	tierSet     bool
 }
 
 // An Option configures a Session. The client packages re-export these, so
@@ -110,8 +115,23 @@ func NewSession(host string, opts ...Option) *Session {
 	for _, opt := range opts {
 		opt(s)
 	}
+	if !s.tierSet {
+		s.tradingTier = TierStandard
+	}
+	if !s.limiterSet {
+		// Limits are keyed to the host this session was constructed for,
+		// not to one a WithHost option may have redirected to: a proxy in
+		// front of the CLOB still consumes the CLOB's allowance, and an
+		// unrecognised host gets no pacing rather than a guessed one.
+		if rules, ok := RateLimitsFor(host); ok {
+			s.limiter = NewLimiter(rules, s.tradingTier)
+		}
+	}
 	return s
 }
+
+// Limiter reports the limiter pacing this session, or nil when pacing is off.
+func (s *Session) Limiter() Limiter { return s.limiter }
 
 // Host reports where this session sends requests.
 func (s *Session) Host() string { return s.host }
@@ -159,6 +179,12 @@ type Request struct {
 	Auth AuthLevel
 	// Out receives the decoded response. Leave it nil to discard the body.
 	Out any
+
+	// Cost is what this request spends from the per-signer trading
+	// allowance. Zero means one, so an ordinary request needs no thought;
+	// a batch costs one per entry, and a cancellation that removes several
+	// orders costs one per order removed.
+	Cost int
 }
 
 // Do issues a request and decodes its response.
@@ -204,11 +230,21 @@ func (s *Session) Do(ctx context.Context, r Request) error {
 		req.Header.Set(k, v)
 	}
 
+	if s.limiter != nil {
+		if err := s.limiter.Wait(ctx, r); err != nil {
+			return fmt.Errorf("polymarket: %s %s: %w: %w", r.Method, r.Path, err, ErrNotSent)
+		}
+	}
+
 	resp, err := s.send(ctx, req, body)
 	if err != nil {
 		return fmt.Errorf("polymarket: %s %s: %w", r.Method, r.Path, err)
 	}
 	defer resp.Body.Close()
+
+	if s.limiter != nil {
+		s.limiter.Observe(r, resp.StatusCode, resp.Header)
+	}
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {

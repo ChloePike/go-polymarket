@@ -19,6 +19,8 @@ type goldenTypeHashes struct {
 	Domain string `json:"domain"`
 }
 
+// goldenFile is the subset of testdata/vectors.json this package reads. The
+// file holds far more than this; everything else is another package's golden.
 type goldenFile struct {
 	TypeHashes goldenTypeHashes `json:"typeHashes"`
 }

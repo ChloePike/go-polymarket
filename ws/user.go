@@ -25,6 +25,9 @@ type Credentials struct {
 	Passphrase string
 }
 
+// userAuth is the wire form of Credentials inside a user-channel subscribe
+// frame. It exists separately from Credentials so the JSON field names stay
+// an implementation detail of the protocol rather than of the public type.
 type userAuth struct {
 	APIKey     string `json:"apiKey"`
 	Secret     string `json:"secret"`

@@ -32,6 +32,8 @@ type endpoint struct {
 	pingInterval time.Duration
 }
 
+// marketConfig is the resolved option set for a market-channel dial: the
+// shared endpoint plus the market channel's own feature switches.
 type marketConfig struct {
 	endpoint
 	level                int
@@ -39,10 +41,14 @@ type marketConfig struct {
 	initialDump          bool
 }
 
+// userConfig is the resolved option set for a user-channel dial. The user
+// channel takes no options beyond the shared endpoint.
 type userConfig struct {
 	endpoint
 }
 
+// rtdsConfig is the resolved option set for an RTDS dial. RTDS takes no
+// options beyond the shared endpoint.
 type rtdsConfig struct {
 	endpoint
 }
