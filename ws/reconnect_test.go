@@ -87,8 +87,7 @@ func TestReconnectClosesDroppedConnection(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sub := newMarketSubscription([]string{"tok1"})
-	conn, err := newConn(ctx, srv.url(), sub, decodeMarket, time.Hour)
+	conn, err := DialMarket(ctx, []string{"tok1"}, WithURL(srv.url()), WithPingInterval(time.Hour))
 	if err != nil {
 		t.Fatalf("newConn: %v", err)
 	}
@@ -137,8 +136,7 @@ func TestCloseStopsEveryGoroutine(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		ctx, cancel := context.WithCancel(context.Background())
-		sub := newMarketSubscription([]string{"tok1"})
-		conn, err := newConn(ctx, srv.url(), sub, decodeMarket, 20*time.Millisecond)
+		conn, err := DialMarket(ctx, []string{"tok1"}, WithURL(srv.url()), WithPingInterval(20*time.Millisecond))
 		if err != nil {
 			t.Fatalf("newConn: %v", err)
 		}
@@ -166,8 +164,7 @@ func TestCloseDuringReconnectBackoff(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sub := newMarketSubscription([]string{"tok1"})
-	conn, err := newConn(ctx, srv.url(), sub, decodeMarket, 20*time.Millisecond)
+	conn, err := DialMarket(ctx, []string{"tok1"}, WithURL(srv.url()), WithPingInterval(20*time.Millisecond))
 	if err != nil {
 		t.Fatalf("newConn: %v", err)
 	}
@@ -198,8 +195,7 @@ func TestConcurrentWriters(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sub := newMarketSubscription([]string{"tok1"})
-	conn, err := newConn(ctx, srv.url(), sub, decodeMarket, time.Millisecond)
+	conn, err := DialMarket(ctx, []string{"tok1"}, WithURL(srv.url()), WithPingInterval(time.Millisecond))
 	if err != nil {
 		t.Fatalf("newConn: %v", err)
 	}

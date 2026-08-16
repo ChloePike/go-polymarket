@@ -17,8 +17,7 @@ func TestUserAuthFrame(t *testing.T) {
 	defer cancel()
 
 	creds := Credentials{APIKey: "key-1", Secret: "secret-1", Passphrase: "pass-1"}
-	sub := newUserSubscription(creds, []string{"0xcond1", "0xcond2"})
-	conn, err := newConn(ctx, srv.url(), sub, decodeUser, clobPingInterval)
+	conn, err := DialUser(ctx, creds, []string{"0xcond1", "0xcond2"}, WithURL(srv.url()))
 	if err != nil {
 		t.Fatalf("newConn: %v", err)
 	}
@@ -106,8 +105,8 @@ func TestUserDecodeEventTypes(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sub := newUserSubscription(Credentials{APIKey: "k", Secret: "s", Passphrase: "p"}, nil)
-	conn, err := newConn(ctx, srv.url(), sub, decodeUser, clobPingInterval)
+	conn, err := DialUser(ctx, Credentials{APIKey: "k", Secret: "s", Passphrase: "p"}, nil,
+		WithURL(srv.url()))
 	if err != nil {
 		t.Fatalf("newConn: %v", err)
 	}
@@ -130,8 +129,8 @@ func TestUserSubscribeMarkets(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sub := newUserSubscription(Credentials{APIKey: "k", Secret: "s", Passphrase: "p"}, []string{"0xcond1"})
-	conn, err := newConn(ctx, srv.url(), sub, decodeUser, clobPingInterval)
+	conn, err := DialUser(ctx, Credentials{APIKey: "k", Secret: "s", Passphrase: "p"},
+		[]string{"0xcond1"}, WithURL(srv.url()))
 	if err != nil {
 		t.Fatalf("newConn: %v", err)
 	}

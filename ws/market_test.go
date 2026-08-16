@@ -93,13 +93,9 @@ func readEvent(t *testing.T, conn *Conn) Event {
 
 func dialTestMarket(t *testing.T, ctx context.Context, url string, assetIDs []string, opts ...MarketOption) *Conn {
 	t.Helper()
-	sub := newMarketSubscription(assetIDs)
-	for _, opt := range opts {
-		opt(sub)
-	}
-	conn, err := newConn(ctx, url, sub, decodeMarket, clobPingInterval)
+	conn, err := DialMarket(ctx, assetIDs, append([]MarketOption{WithURL(url)}, opts...)...)
 	if err != nil {
-		t.Fatalf("newConn: %v", err)
+		t.Fatalf("DialMarket: %v", err)
 	}
 	t.Cleanup(func() { conn.Close() })
 	return conn
@@ -296,8 +292,7 @@ func TestMarketPingKeepalive(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sub := newMarketSubscription([]string{"tok1"})
-	conn, err := newConn(ctx, srv.url(), sub, decodeMarket, 50*time.Millisecond)
+	conn, err := DialMarket(ctx, []string{"tok1"}, WithURL(srv.url()), WithPingInterval(50*time.Millisecond))
 	if err != nil {
 		t.Fatalf("newConn: %v", err)
 	}
@@ -403,8 +398,7 @@ func TestMarketContextCancelShutsDown(t *testing.T) {
 	srv := newFakeMarketServer(t)
 	ctx, cancel := context.WithCancel(context.Background())
 
-	sub := newMarketSubscription([]string{"tok1"})
-	conn, err := newConn(ctx, srv.url(), sub, decodeMarket, clobPingInterval)
+	conn, err := DialMarket(ctx, []string{"tok1"}, WithURL(srv.url()), WithPingInterval(clobPingInterval))
 	if err != nil {
 		t.Fatalf("newConn: %v", err)
 	}

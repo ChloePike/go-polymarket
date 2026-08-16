@@ -120,9 +120,13 @@ func (s *userSubscription) change(add bool, ids []string) ([]byte, error) {
 //
 // Ids passed to Subscribe and Unsubscribe on the returned Conn are
 // condition IDs, the same kind as conditionIDs here.
-func DialUser(ctx context.Context, creds Credentials, conditionIDs []string) (*Conn, error) {
+func DialUser(ctx context.Context, creds Credentials, conditionIDs []string, opts ...UserOption) (*Conn, error) {
+	cfg := userConfig{endpoint: endpoint{url: UserURL, pingInterval: clobPingInterval}}
+	for _, opt := range opts {
+		opt.applyUser(&cfg)
+	}
 	sub := newUserSubscription(creds, conditionIDs)
-	return newConn(ctx, UserURL, sub, decodeUser, clobPingInterval)
+	return newConn(ctx, cfg.url, sub, decodeUser, cfg.pingInterval)
 }
 
 // decodeUser decodes one inbound user-channel text frame into zero or more

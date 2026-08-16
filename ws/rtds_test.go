@@ -19,8 +19,7 @@ func TestRTDSSubscribeFrame(t *testing.T) {
 	subs := []RTDSSubscription{
 		{Topic: TopicCryptoPrices, Type: "update", Filters: "btcusdt,ethusdt"},
 	}
-	sub := newRTDSSubscription(subs)
-	conn, err := newConn(ctx, srv.url(), sub, decodeRTDS, rtdsPingInterval)
+	conn, err := DialRTDS(ctx, subs, WithURL(srv.url()))
 	if err != nil {
 		t.Fatalf("newConn: %v", err)
 	}
@@ -50,8 +49,8 @@ func TestRTDSDynamicSubscribeUnsupported(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sub := newRTDSSubscription([]RTDSSubscription{{Topic: TopicCryptoPrices, Type: "update"}})
-	conn, err := newConn(ctx, srv.url(), sub, decodeRTDS, rtdsPingInterval)
+	conn, err := DialRTDS(ctx, []RTDSSubscription{{Topic: TopicCryptoPrices, Type: "update"}},
+		WithURL(srv.url()))
 	if err != nil {
 		t.Fatalf("newConn: %v", err)
 	}
@@ -77,8 +76,8 @@ func TestRTDSEmptyAckSwallowed(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sub := newRTDSSubscription([]RTDSSubscription{{Topic: TopicCryptoPrices, Type: "update"}})
-	conn, err := newConn(ctx, srv.url(), sub, decodeRTDS, rtdsPingInterval)
+	conn, err := DialRTDS(ctx, []RTDSSubscription{{Topic: TopicCryptoPrices, Type: "update"}},
+		WithURL(srv.url()))
 	if err != nil {
 		t.Fatalf("newConn: %v", err)
 	}
@@ -173,8 +172,8 @@ func TestRTDSDecodeEventTypes(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sub := newRTDSSubscription([]RTDSSubscription{{Topic: TopicCryptoPrices, Type: "update"}})
-	conn, err := newConn(ctx, srv.url(), sub, decodeRTDS, rtdsPingInterval)
+	conn, err := DialRTDS(ctx, []RTDSSubscription{{Topic: TopicCryptoPrices, Type: "update"}},
+		WithURL(srv.url()))
 	if err != nil {
 		t.Fatalf("newConn: %v", err)
 	}

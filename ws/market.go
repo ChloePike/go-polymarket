@@ -31,30 +31,6 @@ type marketOperationRequest struct {
 	CustomFeatureEnabled bool     `json:"custom_feature_enabled"`
 }
 
-// MarketOption customizes a connection created by DialMarket.
-type MarketOption func(*marketSubscription)
-
-// WithLevel sets the market channel's subscription level. Valid values are
-// 1, 2 (the default), and 3, but Polymarket's own AsyncAPI schema defines
-// no behavioral difference between them; only level 2 was exercised live.
-func WithLevel(level int) MarketOption {
-	return func(s *marketSubscription) { s.level = level }
-}
-
-// WithCustomFeatureEnabled turns on the BestBidAskEvent, NewMarketEvent,
-// and MarketResolvedEvent event types, none of which are sent otherwise.
-// Not exercised live.
-func WithCustomFeatureEnabled(enabled bool) MarketOption {
-	return func(s *marketSubscription) { s.customFeatureEnabled = enabled }
-}
-
-// WithInitialDump controls whether the server sends an immediate BookEvent
-// for every subscribed asset on connect (and on every reconnect). Defaults
-// to true, matching the server's own documented default.
-func WithInitialDump(dump bool) MarketOption {
-	return func(s *marketSubscription) { s.initialDump = dump }
-}
-
 // marketSubscription tracks the market channel's desired asset set and
 // implements subscription.
 type marketSubscription struct {
@@ -65,11 +41,12 @@ type marketSubscription struct {
 	initialDump          bool
 }
 
-func newMarketSubscription(assetIDs []string) *marketSubscription {
+func newMarketSubscription(assetIDs []string, cfg marketConfig) *marketSubscription {
 	s := &marketSubscription{
-		assetIDs:    make(map[string]struct{}, len(assetIDs)),
-		level:       2,
-		initialDump: true,
+		assetIDs:             make(map[string]struct{}, len(assetIDs)),
+		level:                cfg.level,
+		customFeatureEnabled: cfg.customFeatureEnabled,
+		initialDump:          cfg.initialDump,
 	}
 	for _, id := range assetIDs {
 		s.assetIDs[id] = struct{}{}
@@ -136,11 +113,16 @@ func (s *marketSubscription) change(add bool, ids []string) ([]byte, error) {
 // Ids passed to Subscribe and Unsubscribe on the returned Conn are CLOB
 // token IDs, the same kind as assetIDs here.
 func DialMarket(ctx context.Context, assetIDs []string, opts ...MarketOption) (*Conn, error) {
-	sub := newMarketSubscription(assetIDs)
-	for _, opt := range opts {
-		opt(sub)
+	cfg := marketConfig{
+		endpoint:    endpoint{url: MarketURL, pingInterval: clobPingInterval},
+		level:       2,
+		initialDump: true,
 	}
-	return newConn(ctx, MarketURL, sub, decodeMarket, clobPingInterval)
+	for _, opt := range opts {
+		opt.applyMarket(&cfg)
+	}
+	sub := newMarketSubscription(assetIDs, cfg)
+	return newConn(ctx, cfg.url, sub, decodeMarket, cfg.pingInterval)
 }
 
 // decodeMarket decodes one inbound market-channel text frame into zero or

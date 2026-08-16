@@ -100,9 +100,13 @@ func (s *rtdsSubscription) change(add bool, ids []string) ([]byte, error) {
 // A Conn from DialRTDS does not support Subscribe or Unsubscribe: there is
 // no documented operation to add or remove topics without reconnecting.
 // Calling either returns ErrDynamicSubscribeUnsupported.
-func DialRTDS(ctx context.Context, subs []RTDSSubscription) (*Conn, error) {
+func DialRTDS(ctx context.Context, subs []RTDSSubscription, opts ...RTDSOption) (*Conn, error) {
+	cfg := rtdsConfig{endpoint: endpoint{url: RTDSURL, pingInterval: rtdsPingInterval}}
+	for _, opt := range opts {
+		opt.applyRTDS(&cfg)
+	}
 	sub := newRTDSSubscription(subs)
-	return newConn(ctx, RTDSURL, sub, decodeRTDS, rtdsPingInterval)
+	return newConn(ctx, cfg.url, sub, decodeRTDS, cfg.pingInterval)
 }
 
 // Number is a numeric field whose JSON representation was inconsistent
