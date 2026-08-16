@@ -97,6 +97,11 @@ type Client struct {
 	// UserAgent is sent with every request. Empty means a default naming this
 	// package.
 	UserAgent string
+
+	// Retries bounds how many extra attempts a GET gets after a connection
+	// failure. Zero means defaultRetries; negative disables retrying. Writes
+	// are never retried — see send.
+	Retries int
 }
 
 const defaultUserAgent = "go-polymarket"
@@ -238,7 +243,7 @@ func (c *Client) do(ctx context.Context, r request) error {
 		req.Header.Set(k, v)
 	}
 
-	resp, err := c.httpClient().Do(req)
+	resp, err := c.send(ctx, req, body)
 	if err != nil {
 		return fmt.Errorf("polymarket: %s %s: %w", r.method, path, err)
 	}
@@ -268,6 +273,55 @@ func (c *Client) do(ctx context.Context, r request) error {
 			r.method, path, err, truncate(string(data), 256))
 	}
 	return nil
+}
+
+// Retries bounds how many extra attempts a failed read gets. Zero means the
+// default; a negative value disables retrying.
+//
+// Only GET requests are ever retried, and only when the request failed at the
+// connection level — a refused dial, a reset, a truncated response. A request
+// the server answered is never retried whatever it answered, and a POST or a
+// DELETE is never retried at all: resending an order submission that may have
+// been received is how an account ends up holding two positions it asked for
+// once.
+const defaultRetries = 2
+
+// send issues a request, retrying a GET that never reached an answer.
+func (c *Client) send(ctx context.Context, req *http.Request, body []byte) (*http.Response, error) {
+	attempts := c.Retries
+	if attempts == 0 {
+		attempts = defaultRetries
+	}
+	if attempts < 0 || req.Method != http.MethodGet {
+		attempts = 0
+	}
+
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		if attempt > 0 {
+			// A short, growing pause: the failures worth retrying are
+			// transient network ones, and hammering helps neither side.
+			delay := time.Duration(attempt) * 250 * time.Millisecond
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(delay):
+			}
+			// A retried request needs its own body reader; GETs have none,
+			// but keep this honest if that ever changes.
+			if body != nil {
+				req.Body = io.NopCloser(bytes.NewReader(body))
+			}
+		}
+		resp, err := c.httpClient().Do(req)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		if attempt >= attempts || ctx.Err() != nil {
+			return nil, lastErr
+		}
+	}
 }
 
 // authHeaders builds the headers for a request's authentication level.

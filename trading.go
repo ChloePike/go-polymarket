@@ -711,6 +711,38 @@ func (c *Client) DropNotifications(ctx context.Context, ids []string) error {
 	})
 }
 
+// FeeCurve is a market's platform fee curve: the two numbers that
+// AdjustBuyAmountForFees needs.
+type FeeCurve struct {
+	// Rate is the base fee rate as a fraction.
+	Rate float64
+	// Exponent shapes how the rate scales with distance from an even price.
+	Exponent float64
+}
+
+// FeeCurve reports a token's platform fee curve. No authentication.
+//
+// The exchange does not serve this per token, so it takes two hops: the token
+// resolves to a condition id, and the condition id to the market summary that
+// carries the curve. Feed the result to AdjustBuyAmountForFees.
+func (c *Client) FeeCurve(ctx context.Context, tokenID string) (FeeCurve, error) {
+	byToken, err := c.MarketByToken(ctx, tokenID)
+	if err != nil {
+		return FeeCurve{}, fmt.Errorf("polymarket: resolving condition id for token %s: %w", tokenID, err)
+	}
+	if byToken.ConditionID == "" {
+		return FeeCurve{}, fmt.Errorf("polymarket: token %s has no condition id", tokenID)
+	}
+	market, err := c.ClobMarket(ctx, byToken.ConditionID)
+	if err != nil {
+		return FeeCurve{}, err
+	}
+	if market.Fee == nil {
+		return FeeCurve{}, fmt.Errorf("polymarket: market %s reports no fee curve", byToken.ConditionID)
+	}
+	return FeeCurve{Rate: market.Fee.Rate, Exponent: market.Fee.Exponent}, nil
+}
+
 // APIVersion reports the order version the exchange currently accepts. No
 // authentication.
 //
