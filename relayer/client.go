@@ -6,10 +6,16 @@
 // user signs an operation for their proxy or Safe wallet off chain, and the
 // relayer broadcasts it and pays the gas.
 //
-// This package wraps the relayer's read endpoints. Four of them are public —
-// Nonce, RelayPayload, Deployed and Transaction need no credentials at all.
-// Two are authenticated: Transactions reports the caller's own transactions,
-// and APIKeys lists the caller's relayer API keys.
+// Four read endpoints are public: Nonce, RelayPayload, Deployed and
+// Transaction need no credentials at all. Two are authenticated —
+// Transactions reports the caller's own transactions, APIKeys lists their
+// relayer API keys — and so is Submit.
+//
+// BuildSafeTransaction, BuildProxyTransaction and BuildWalletBatch sign what
+// a wallet should do; Submit hands it to Polymarket to pay for and send.
+// Submitting spends money and cannot be taken back, and the relayer answers
+// with an id rather than a result: poll Transaction until the state is
+// terminal.
 //
 // The relayer has two credential schemes, and they are not interchangeable
 // per endpoint:
@@ -23,12 +29,9 @@
 //     APIKeys.
 //
 // Both are secrets. Keep them in the environment, never in a source file.
-//
-// Submitting a transaction is not part of this package.
 package relayer
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -53,12 +56,8 @@ func New(opts ...Option) *Client {
 	for _, opt := range opts {
 		opt.apply(&cfg)
 	}
-	sessionOpts := cfg.session
-	if hc := cfg.httpClient(); hc != nil {
-		sessionOpts = append(sessionOpts, polymarket.WithHTTPClient(hc))
-	}
 	return &Client{
-		session: polymarket.NewSession(polymarket.RelayerHost, sessionOpts...),
+		session: polymarket.NewSession(polymarket.RelayerHost, cfg.session...),
 		auth:    cfg.auth,
 	}
 }
@@ -66,20 +65,26 @@ func New(opts ...Option) *Client {
 // NewWithSession returns a client that shares an existing Session, so one
 // wallet and one http.Client can serve several API packages.
 //
-// The client it returns reads the public endpoints only. Credentials travel
-// on a transport New installs, which a Session built elsewhere does not
-// carry, so Transactions and APIKeys report ErrNoCredentials on it. Use New
-// with WithAPIKey or WithBuilderCredentials to authenticate.
+// It reads the public endpoints. Give it credentials with SetAuthenticator
+// when it also needs the authenticated ones.
 func NewWithSession(s *polymarket.Session) *Client { return &Client{session: s} }
+
+// SetAuthenticator adopts the credentials the authenticated endpoints use,
+// for a client built by NewWithSession or one whose credentials arrive after
+// construction.
+//
+// Call it before the first authenticated request. A Client is otherwise safe
+// for concurrent use; this is not.
+func (c *Client) SetAuthenticator(a Authenticator) { c.auth = a }
 
 // An Option configures a Client.
 //
 // The options every Polymarket client package takes are re-exported below
 // under their usual names, so relayer.WithHost and gamma.WithHost do the same
 // thing. Option is this package's own type rather than an alias for
-// polymarket.Option because the credential options configure the Client
-// itself, which a polymarket.Option — a function over a Session — cannot
-// reach.
+// polymarket.Option for one reason: the credential options configure the
+// Client, and a polymarket.Option is a function over a Session, which cannot
+// reach it. SetAuthenticator is the same thing after construction.
 type Option interface {
 	apply(*config)
 }
@@ -87,34 +92,8 @@ type Option interface {
 // config is the resolved option set New builds a Client from.
 type config struct {
 	session []polymarket.Option
-	client  *http.Client
 	auth    Authenticator
 }
-
-// httpClient returns the http.Client to install on the session, or nil to
-// leave the session its own default.
-//
-// A Client with credentials needs the header transport wrapped around
-// whatever transport it would otherwise use. A caller's own http.Client is
-// copied rather than modified: the caller may be sharing it with something
-// else that must not start sending relayer credentials.
-func (cfg *config) httpClient() *http.Client {
-	if cfg.auth == nil {
-		return cfg.client
-	}
-	out := &http.Client{Timeout: defaultTimeout}
-	if cfg.client != nil {
-		clone := *cfg.client
-		out = &clone
-	}
-	out.Transport = headerTransport{base: out.Transport}
-	return out
-}
-
-// defaultTimeout matches the timeout the root package gives a session that
-// was handed no http.Client. It is repeated here because supplying a client
-// at all — which the header transport requires — opts out of that default.
-const defaultTimeout = 30 * time.Second
 
 // sessionOption carries one polymarket.Option through to NewSession.
 type sessionOption struct {
@@ -122,13 +101,6 @@ type sessionOption struct {
 }
 
 func (o sessionOption) apply(cfg *config) { cfg.session = append(cfg.session, o.opt) }
-
-// httpClientOption holds the caller's http.Client until New can wrap it.
-type httpClientOption struct {
-	client *http.Client
-}
-
-func (o httpClientOption) apply(cfg *config) { cfg.client = o.client }
 
 // authOption holds the credentials the authenticated endpoints use.
 type authOption struct {
@@ -142,10 +114,9 @@ func WithHost(host string) Option { return sessionOption{opt: polymarket.WithHos
 
 // WithHTTPClient supplies the http.Client that issues requests. Use it to set
 // a timeout, a transport, or a proxy. The default allows 30 seconds.
-//
-// The client is copied, not modified. On a Client with credentials the copy
-// carries an extra transport that adds the credential headers.
-func WithHTTPClient(c *http.Client) Option { return httpClientOption{client: c} }
+func WithHTTPClient(c *http.Client) Option {
+	return sessionOption{opt: polymarket.WithHTTPClient(c)}
+}
 
 // WithSigner supplies the wallet key. No endpoint in this package uses it;
 // it is here so one option set can build every client package.
@@ -313,52 +284,16 @@ var ErrNoCredentials = fmt.Errorf(
 	"relayer: no relayer credentials: build the client with WithAPIKey or WithBuilderCredentials: %w",
 	polymarket.ErrNoCredentials)
 
-// authHeadersKey marks a request context carrying the credential headers for
-// one call.
-//
-// The root Session builds the http.Request itself and accepts no extra
-// headers, so a Client hands its headers to its own transport through the
-// context instead. Marking each call rather than every request is deliberate:
-// a public relayer endpoint then never carries a credential it has no use
-// for.
-type authHeadersKey struct{}
-
-// headerTransport applies the headers a Client attached to the request
-// context. New installs it on a Client that has credentials.
-type headerTransport struct {
-	base http.RoundTripper
-}
-
-// RoundTrip adds the call's credential headers, if it has any, and forwards.
-func (t headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	base := t.base
-	if base == nil {
-		base = http.DefaultTransport
-	}
-	headers, ok := req.Context().Value(authHeadersKey{}).(map[string]string)
-	if !ok {
-		return base.RoundTrip(req)
-	}
-	// A RoundTripper must not modify the request it is given.
-	req = req.Clone(req.Context())
-	for k, v := range headers {
-		req.Header.Set(k, v)
-	}
-	return base.RoundTrip(req)
-}
-
-// authContext returns a context carrying the credential headers for one call.
+// authHeaders renders the credential headers for one call.
 //
 // Every authenticated relayer method goes through it, writes included: pass
-// the method, the bare path and the encoded body, and hand the context it
-// returns to the session.
-func (c *Client) authContext(ctx context.Context, method, requestPath, body string) (context.Context, error) {
+// the method, the bare path and the encoded body, and put the result in the
+// request's Headers. Rendering them per call rather than per client is
+// deliberate — a public relayer endpoint never carries a credential it has no
+// use for — and a signing scheme covers the very request it travels on.
+func (c *Client) authHeaders(method, requestPath, body string) (map[string]string, error) {
 	if c.auth == nil {
 		return nil, ErrNoCredentials
 	}
-	headers, err := c.auth.AuthHeaders(method, requestPath, body)
-	if err != nil {
-		return nil, err
-	}
-	return context.WithValue(ctx, authHeadersKey{}, headers), nil
+	return c.auth.AuthHeaders(method, requestPath, body)
 }

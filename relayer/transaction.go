@@ -795,16 +795,17 @@ func (c *Client) Submit(ctx context.Context, req SubmitRequest) (SubmitResponse,
 	if err != nil {
 		return SubmitResponse{}, err
 	}
-	authed, err := c.authContext(ctx, http.MethodPost, epSubmit, body)
+	headers, err := c.authHeaders(http.MethodPost, epSubmit, body)
 	if err != nil {
 		return SubmitResponse{}, err
 	}
 	var out SubmitResponse
-	if err := c.session.Do(authed, polymarket.Request{
-		Method: http.MethodPost,
-		Path:   epSubmit,
-		Body:   req,
-		Out:    &out,
+	if err := c.session.Do(ctx, polymarket.Request{
+		Method:  http.MethodPost,
+		Path:    epSubmit,
+		Body:    req,
+		Headers: headers,
+		Out:     &out,
 	}); err != nil {
 		return SubmitResponse{}, err
 	}

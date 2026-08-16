@@ -49,6 +49,8 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+
+	polymarket "github.com/ChloePike/go-polymarket"
 )
 
 // Relayer paths. Every one is a bare path on RelayerHost; the API keys
@@ -294,12 +296,17 @@ func (c *Client) Transaction(ctx context.Context, id string) ([]Transaction, err
 //
 // GET /transactions
 func (c *Client) Transactions(ctx context.Context) ([]Transaction, error) {
-	ctx, err := c.authContext(ctx, http.MethodGet, epTransactions, "")
+	headers, err := c.authHeaders(http.MethodGet, epTransactions, "")
 	if err != nil {
 		return nil, err
 	}
 	var out []Transaction
-	if err := c.session.Get(ctx, epTransactions, nil, &out); err != nil {
+	if err := c.session.Do(ctx, polymarket.Request{
+		Method:  http.MethodGet,
+		Path:    epTransactions,
+		Headers: headers,
+		Out:     &out,
+	}); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -320,12 +327,17 @@ func (c *Client) Transactions(ctx context.Context) ([]Transaction, error) {
 //
 // GET /relayer/api/keys
 func (c *Client) APIKeys(ctx context.Context) ([]APIKey, error) {
-	ctx, err := c.authContext(ctx, http.MethodGet, epAPIKeys, "")
+	headers, err := c.authHeaders(http.MethodGet, epAPIKeys, "")
 	if err != nil {
 		return nil, err
 	}
 	var out []APIKey
-	if err := c.session.Get(ctx, epAPIKeys, nil, &out); err != nil {
+	if err := c.session.Do(ctx, polymarket.Request{
+		Method:  http.MethodGet,
+		Path:    epAPIKeys,
+		Headers: headers,
+		Out:     &out,
+	}); err != nil {
 		return nil, err
 	}
 	return out, nil

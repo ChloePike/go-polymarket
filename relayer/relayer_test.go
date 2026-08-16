@@ -628,3 +628,88 @@ func TestNewDefaultsToRelayerHost(t *testing.T) {
 		t.Errorf("Host() = %q, want %q", got, polymarket.RelayerHost)
 	}
 }
+
+// TestSharedSessionCanAuthenticate covers what collapsing the credential
+// transport bought: credentials are per-request headers now, so a Client
+// built on somebody else's Session can use the authenticated endpoints.
+// Before, they rode a transport only New could install.
+func TestSharedSessionCanAuthenticate(t *testing.T) {
+	var got http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		w.Write([]byte("[]"))
+	}))
+	defer srv.Close()
+
+	// A session a caller built for their own reasons, shared across packages.
+	shared := polymarket.NewSession(srv.URL)
+	c := NewWithSession(shared)
+
+	if _, err := c.Transactions(context.Background()); err == nil {
+		t.Fatal("a shared session with no credentials reached the endpoint")
+	}
+
+	c.SetAuthenticator(testAPIKey)
+	if _, err := c.Transactions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if v := got.Get(headerAPIKey); v != testAPIKey.Key {
+		t.Errorf("%s = %q, want %q", headerAPIKey, v, testAPIKey.Key)
+	}
+}
+
+// TestPublicCallsCarryNoCredentials checks that rendering the headers per call
+// rather than per client still holds. A relayer API key is a bearer token, and
+// a public endpoint has no use for one.
+func TestPublicCallsCarryNoCredentials(t *testing.T) {
+	var got http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		w.Write([]byte(`{"nonce":"1"}`))
+	}))
+	defer srv.Close()
+
+	c := New(WithHost(srv.URL), WithAPIKey(testAPIKey))
+	if _, err := c.Nonce(context.Background(), testAPIKey.Address, WalletTypeSafe); err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range []string{headerAPIKey, headerAPIKeyAddress, headerBuilderAPIKey} {
+		if v := got.Get(h); v != "" {
+			t.Errorf("a public call carried %s = %q", h, v)
+		}
+	}
+}
+
+// TestCallerHTTPClientIsUsedUnchanged checks that supplying an http.Client no
+// longer replaces it. It used to be copied and given an extra transport to
+// carry the credential headers; nothing wraps it now.
+func TestCallerHTTPClientIsUsedUnchanged(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("[]"))
+	}))
+	defer srv.Close()
+
+	var used bool
+	transport := roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		used = true
+		return http.DefaultTransport.RoundTrip(r)
+	})
+	client := &http.Client{Transport: transport, Timeout: 7 * time.Second}
+
+	c := New(WithHost(srv.URL), WithHTTPClient(client), WithAPIKey(testAPIKey))
+	if _, err := c.Transactions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !used {
+		t.Error("the caller's transport was not the one that issued the request")
+	}
+	if client.Timeout != 7*time.Second {
+		t.Errorf("the caller's client was modified: timeout is now %v", client.Timeout)
+	}
+}
+
+// A roundTripperFunc adapts a function to http.RoundTripper.
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+// RoundTrip calls the function.
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
