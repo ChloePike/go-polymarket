@@ -14,13 +14,16 @@ import (
 	"github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"
 )
 
-// A Signer produces the secp256k1 signatures the exchange verifies. Orders and
-// the level-1 authentication payload are both EIP-712 typed data, so a Signer
-// only ever sees a finished 32-byte digest.
+// A Signer produces the secp256k1 signatures the exchange verifies.
 //
 // Implement it to keep key material outside this process — in a hardware
 // wallet, a remote signing service, or an enclave. PrivateKey is the in-memory
 // implementation.
+//
+// This interface sees only the finished digest, which is enough to sign but
+// not enough to show anyone what is being signed. A signer that needs the
+// fields — to render them, log them, or apply a policy to them — should also
+// implement TypedDataSigner, which this package prefers when it is available.
 type Signer interface {
 	// Address returns the signing address in EIP-55 checksummed form.
 	Address() string
@@ -29,6 +32,77 @@ type Signer interface {
 	// 27 or 28. The signature must be canonical: s in the lower half of the
 	// curve order, as EIP-2 requires.
 	SignDigest(digest [32]byte) ([]byte, error)
+}
+
+// A TypedDataSigner is a Signer that wants the whole EIP-712 payload rather
+// than its hash. Implement it when the signature is produced somewhere that
+// needs to see what it is authorising: a hardware wallet rendering the order
+// for a human, an audit log recording the fields, or a policy engine refusing
+// an order for its size.
+//
+// It is optional. This package prefers it when a Signer implements it and
+// falls back to SignDigest otherwise, so an existing Signer keeps working.
+//
+// An implementation MUST derive the digest from the payload it was given,
+// with TypedData.Digest, and must not accept a digest from elsewhere: showing
+// one thing and signing another is the failure this interface exists to
+// prevent. This package verifies the returned signature recovers to
+// Address(), which catches that mistake locally.
+type TypedDataSigner interface {
+	Signer
+
+	// SignTypedData signs an EIP-712 payload, returning r ‖ s ‖ v as
+	// SignDigest does.
+	SignTypedData(td TypedData) ([]byte, error)
+}
+
+// signTypedData produces a signature over a payload, preferring a signer that
+// can see the payload and falling back to the digest.
+func signTypedData(s Signer, td TypedData) ([]byte, error) {
+	digest, err := td.Digest()
+	if err != nil {
+		return nil, err
+	}
+
+	var sig []byte
+	if rich, ok := s.(TypedDataSigner); ok {
+		if sig, err = rich.SignTypedData(td); err != nil {
+			return nil, err
+		}
+		// An external signer is the one place a signature can cover
+		// something other than what was shown. Recovering it costs one
+		// operation and turns a silent mis-sign into an immediate error
+		// rather than a rejection from the exchange.
+		if err := VerifySignature(digest, sig, s.Address()); err != nil {
+			return nil, fmt.Errorf("polymarket: the signer returned a signature for different data: %w", err)
+		}
+		return sig, nil
+	}
+
+	return s.SignDigest(digest)
+}
+
+// VerifySignature reports whether a 65-byte r ‖ s ‖ v signature over digest
+// recovers to address. It is what makes an externally produced signature
+// checkable before it is sent.
+func VerifySignature(digest [32]byte, sig []byte, address string) error {
+	if len(sig) != 65 {
+		return fmt.Errorf("polymarket: signature is %d bytes, want 65", len(sig))
+	}
+	// RecoverCompact wants v ‖ r ‖ s, the inverse of the wire order.
+	compact := make([]byte, 65)
+	compact[0] = sig[64]
+	copy(compact[1:], sig[:64])
+
+	pub, _, err := ecdsa.RecoverCompact(compact, digest[:])
+	if err != nil {
+		return fmt.Errorf("polymarket: signature does not recover: %w", err)
+	}
+	got := addressFromPublicKey(pub)
+	if !strings.EqualFold(got, address) {
+		return fmt.Errorf("polymarket: signature recovers to %s, want %s", got, address)
+	}
+	return nil
 }
 
 // PrivateKey is a Signer holding a secp256k1 key in memory.

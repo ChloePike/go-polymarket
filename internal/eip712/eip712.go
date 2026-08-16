@@ -163,6 +163,12 @@ func (e *Encoder) String(name, value string) {
 	e.append(name, String(value), nil)
 }
 
+// Word appends a field that the caller has already encoded, for a caller that
+// dispatches on a declared type rather than calling a typed method.
+func (e *Encoder) Word(name string, w Word) {
+	e.append(name, w, nil)
+}
+
 func (e *Encoder) append(name string, w Word, err error) {
 	if err != nil {
 		if e.err == nil {

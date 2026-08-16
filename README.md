@@ -134,10 +134,30 @@ Trading moves real money. Every example here is read-only except `authcheck`,
 which only creates a free API key, and no test touches the live network. Keep
 your key in the environment, never in a source file.
 
+## Auditing and institutional signing
+
+`Signer` sees only a digest, which is enough to sign but not enough to show
+anyone what is being signed. Implement `TypedDataSigner` instead and you get
+the whole EIP-712 payload — the fields, the domain, the type string — in the
+exact shape `eth_signTypedData_v4` takes:
+
+```go
+func (s *auditSigner) SignTypedData(td polymarket.TypedData) ([]byte, error) {
+    json.NewEncoder(s.log).Encode(td)   // the audit record is the payload itself
+    digest, err := td.Digest()          // derive it; never accept one
+    ...
+}
+```
+
+The digest has a single implementation, so the payload an auditor reads and
+the bytes a wallet signs cannot drift apart, and this client checks that the
+returned signature recovers to the signing address before sending it.
+
 ## Documentation
 
-Protocol reference, the traps worth knowing, and status:
-**[DESIGN.md](DESIGN.md)**.
+- **[TRADING.md](TRADING.md)** — running this in production: sessions, rate
+  limits, book drift, why a timed-out write must never be resubmitted.
+- **[DESIGN.md](DESIGN.md)** — protocol reference and the traps worth knowing.
 
 ## License
 

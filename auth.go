@@ -9,11 +9,8 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	"math/big"
 	"strconv"
 	"strings"
-
-	"github.com/ChloePike/go-polymarket/internal/eip712"
 )
 
 // The CLOB has two levels of authentication.
@@ -40,27 +37,11 @@ type APICreds struct {
 // uint256. Encoding timestamp as a number produces a well-formed signature
 // that authenticates as nobody.
 func ClobAuthDigest(address string, chainID int64, timestamp string, nonce int64) ([32]byte, error) {
-	domain := eip712.Domain{
-		Name:    clobAuthDomainName,
-		Version: clobAuthDomainVersion,
-		ChainID: big.NewInt(chainID),
-		// No verifying contract: the field leaves the type string entirely.
-	}
-	separator, err := domain.Separator()
-	if err != nil {
-		return [32]byte{}, err
-	}
-	var enc eip712.Encoder
-	enc.Address("address", address)
-	enc.String("timestamp", timestamp)
-	enc.Uint256("nonce", big.NewInt(nonce))
-	enc.String("message", clobAuthMessage)
-
-	structHash, err := enc.StructHash(eip712.TypeHash(clobAuthTypeString))
+	digest, err := ClobAuthTypedData(address, chainID, timestamp, nonce).Digest()
 	if err != nil {
 		return [32]byte{}, fmt.Errorf("polymarket: clob auth: %w", err)
 	}
-	return eip712.Digest(separator, structHash), nil
+	return digest, nil
 }
 
 // L1Headers are the headers that authenticate a key-management request.
@@ -86,11 +67,7 @@ func BuildL1Headers(s Signer, chainID int64, timestamp string, nonce int64) (L1H
 	if s == nil {
 		return L1Headers{}, fmt.Errorf("polymarket: level-1 authentication needs a Signer")
 	}
-	digest, err := ClobAuthDigest(s.Address(), chainID, timestamp, nonce)
-	if err != nil {
-		return L1Headers{}, err
-	}
-	sig, err := s.SignDigest(digest)
+	sig, err := signTypedData(s, ClobAuthTypedData(s.Address(), chainID, timestamp, nonce))
 	if err != nil {
 		return L1Headers{}, fmt.Errorf("polymarket: signing level-1 payload: %w", err)
 	}

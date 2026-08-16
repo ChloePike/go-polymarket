@@ -288,36 +288,20 @@ func assemble(tokenID string, side Side, raw amount.Raw, signerAddress string, o
 }
 
 // OrderDigest returns the 32 bytes an order's signature covers.
+//
+// It is a shorthand for building the typed data and hashing it. There is only
+// one implementation of the hash, in TypedData.Digest, so what an auditor
+// reads from OrderTypedData and what a wallet signs here cannot diverge.
 func OrderDigest(o Order, chainID int64, opts OrderOptions) ([32]byte, error) {
-	domain, err := orderDomain(chainID, opts.version(), opts.NegRisk)
+	td, err := OrderTypedData(o, chainID, opts)
 	if err != nil {
 		return [32]byte{}, err
 	}
-	separator, err := domain.Separator()
-	if err != nil {
-		return [32]byte{}, err
-	}
-
-	// Field order follows orderTypeString exactly. Taker and Expiration are
-	// absent on purpose: they ride on the wire but are not signed.
-	var enc eip712.Encoder
-	enc.Uint("salt", o.Salt)
-	enc.Address("maker", o.Maker)
-	enc.Address("signer", o.Signer)
-	enc.Uint("tokenId", o.TokenID)
-	enc.Uint("makerAmount", o.MakerAmount)
-	enc.Uint("takerAmount", o.TakerAmount)
-	enc.Uint8("side", o.Side.uint8())
-	enc.Uint8("signatureType", uint8(o.SignatureType))
-	enc.Uint("timestamp", o.Timestamp)
-	enc.Bytes32("metadata", o.Metadata)
-	enc.Bytes32("builder", o.Builder)
-
-	structHash, err := enc.StructHash(eip712.TypeHash(orderTypeString))
+	digest, err := td.Digest()
 	if err != nil {
 		return [32]byte{}, fmt.Errorf("polymarket: order: %w", err)
 	}
-	return eip712.Digest(separator, structHash), nil
+	return digest, nil
 }
 
 // SignOrder signs an order for a chain and returns it with its signature.
@@ -325,11 +309,11 @@ func SignOrder(o Order, chainID int64, opts OrderOptions, s Signer) (SignedOrder
 	if s == nil {
 		return SignedOrder{}, fmt.Errorf("polymarket: SignOrder needs a Signer")
 	}
-	digest, err := OrderDigest(o, chainID, opts)
+	td, err := OrderTypedData(o, chainID, opts)
 	if err != nil {
 		return SignedOrder{}, err
 	}
-	sig, err := s.SignDigest(digest)
+	sig, err := signTypedData(s, td)
 	if err != nil {
 		return SignedOrder{}, fmt.Errorf("polymarket: signing order: %w", err)
 	}
