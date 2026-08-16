@@ -4,109 +4,69 @@
 package polymarket_test
 
 import (
-	"context"
-	"errors"
+	"encoding/hex"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
-	"time"
 
 	polymarket "github.com/ChloePike/go-polymarket"
 )
 
-// A token id identifies one outcome of one market. Every read below takes one.
+// A token id identifies one outcome of one market.
 const tokenID = "71321045679252212594626385532706912750332728571942532289631379312455583992563"
 
-// Reading the market needs no credentials at all, so the zero Client is ready
-// to use.
+// The root package holds what every Polymarket client shares: the wallet, the
+// order types, the signing, and the session the client packages are built on.
+// Endpoints live in the clob, gamma, data and ws packages.
 func Example() {
-	var c polymarket.Client
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	book, err := c.OrderBook(ctx, tokenID)
-	if err != nil {
-		log.Fatal(err)
-	}
-	if len(book.Bids) > 0 && len(book.Asks) > 0 {
-		best := book.Bids[len(book.Bids)-1]
-		fmt.Printf("best bid %s for %s shares\n", best.Price, best.Size)
-	}
-}
-
-// A price on Polymarket is a probability: 0.52 means the market puts the
-// outcome at 52 percent.
-func ExampleClient_Midpoint() {
-	var c polymarket.Client
-
-	mid, err := c.Midpoint(context.Background(), tokenID)
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("the market prices this outcome at %s\n", mid)
-}
-
-// The plural price endpoints answer with a map keyed by token id rather than a
-// list, so one request covers a whole watchlist.
-func ExampleClient_Prices() {
-	var c polymarket.Client
-
-	prices, err := c.Prices(context.Background(), []polymarket.BookParams{
-		{TokenID: tokenID, Side: polymarket.Buy},
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	for token, bySide := range prices {
-		for side, price := range bySide {
-			fmt.Printf("%s %s %s\n", token, side, price)
-		}
-	}
-}
-
-// Pages walks a cursor-paginated endpoint to its end, so a caller never has to
-// handle the cursor sentinels.
-func ExamplePages() {
-	var c polymarket.Client
-
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-
-	active := 0
-	for market, err := range polymarket.Pages(ctx, c.Markets) {
-		if err != nil {
-			log.Fatal(err)
-		}
-		if market.Active {
-			active++
-		}
-	}
-	fmt.Printf("%d active markets\n", active)
-}
-
-// A private key never leaves the process: the client signs digests locally and
-// sends signatures, never the key.
-func ExampleNewPrivateKey() {
 	key, err := polymarket.NewPrivateKey(os.Getenv("POLYMARKET_KEY"))
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("reading the key", "err", err)
+		return
 	}
+
+	// One session can serve several client packages, so a wallet and an
+	// http.Client are configured once:
+	//
+	//	s := polymarket.NewSession(polymarket.DefaultHost, polymarket.WithSigner(key))
+	//	c := clob.NewWithSession(s)
 	fmt.Println("trading as", key.Address())
 }
 
-// Building an order is separate from sending one. BuildOrder resolves a price
-// and a size into the integer amounts the exchange verifies, and SignOrder
-// authorises them; nothing has been submitted yet at the end of this function.
-func ExampleBuildOrder() {
+// A private key never leaves the process. The client signs digests locally and
+// sends signatures, never the key itself.
+func ExampleNewPrivateKey() {
 	key, err := polymarket.NewPrivateKey(os.Getenv("POLYMARKET_KEY"))
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("reading the key", "err", err)
+		return
+	}
+	fmt.Println(key.Address())
+}
+
+// Building an order is separate from sending one. BuildOrder turns a price and
+// a size into the integer amounts the exchange verifies, and SignOrder
+// authorises them. Nothing has been submitted when this returns; clob.Client's
+// PostOrder does that.
+func ExampleBuildOrder() {
+	// The well-known Hardhat development key: public, empty, and used here
+	// only so the example produces the same bytes every time.
+	key, err := polymarket.NewPrivateKey(
+		"0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
+	if err != nil {
+		slog.Error("reading the key", "err", err)
+		return
 	}
 
-	// TickSize and NegRisk describe the market and must match it. Client.
-	// CreateOrder fetches both for you; this shows the layer underneath.
-	opts := polymarket.OrderOptions{TickSize: "0.01", NegRisk: false}
+	// TickSize and NegRisk describe the market and must match it; clob's
+	// CreateOrder fetches both for you. Salt and Timestamp are fixed here
+	// only to make the output reproducible.
+	opts := polymarket.OrderOptions{
+		TickSize:  "0.01",
+		NegRisk:   false,
+		Salt:      479249096354,
+		Timestamp: 1740000000000,
+	}
 
 	order, err := polymarket.BuildOrder(polymarket.UserOrder{
 		TokenID: tokenID,
@@ -115,82 +75,85 @@ func ExampleBuildOrder() {
 		Side:    polymarket.Buy,
 	}, key.Address(), opts)
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("building the order", "err", err)
+		return
 	}
 
 	// A buy pays USDC and receives shares, so the maker amount is the cost:
 	// 100 shares at 0.52 is 52 USDC, carried as 52000000 at six decimals.
-	fmt.Println(order.MakerAmount, order.TakerAmount)
+	fmt.Println("maker", order.MakerAmount, "taker", order.TakerAmount)
 
 	signed, err := polymarket.SignOrder(order, polymarket.ChainPolygon, opts, key)
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("signing the order", "err", err)
+		return
 	}
-	_ = signed
+	fmt.Println("signature", signed.Signature[:18]+"…")
+	// Output:
+	// maker 52000000 taker 100000000
+	// signature 0xa79802f2f11608f9…
 }
 
 // A market order is sized by what you are willing to spend rather than by a
-// share count, so a buy names an amount of USDC.
+// share count, so a buy names an amount of USDC and the share count follows
+// from the price.
 func ExampleBuildMarketOrder() {
-	key, err := polymarket.NewPrivateKey(os.Getenv("POLYMARKET_KEY"))
-	if err != nil {
-		log.Fatal(err)
-	}
 	order, err := polymarket.BuildMarketOrder(polymarket.MarketOrder{
 		TokenID: tokenID,
 		Amount:  "100", // USDC to spend
 		Price:   "0.52",
 		Side:    polymarket.Buy,
-	}, key.Address(), polymarket.OrderOptions{TickSize: "0.01"})
+	}, "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+		polymarket.OrderOptions{TickSize: "0.01", Salt: 1, Timestamp: 1})
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("building the order", "err", err)
+		return
 	}
-	fmt.Println(order.MakerAmount, order.TakerAmount)
+	// 100 USDC at 0.52 buys 192.3076 shares once the amount is converged to
+	// the four decimals this tick size allows.
+	fmt.Println("maker", order.MakerAmount, "taker", order.TakerAmount)
+	// Output: maker 100000000 taker 192307600
 }
 
-// Fees are estimated before the trade so the caller can size an order that
-// actually fits the balance.
-func ExampleAdjustBuyAmountForFees() {
-	got, err := polymarket.AdjustBuyAmountForFees(polymarket.FeeParams{
-		Amount:      100,
-		Price:       0.52,
-		USDCBalance: 100,
-		FeeRate:     0.02,
-		FeeExponent: 1,
-	})
+// The digest is what a signature actually covers. It is exported so a wallet
+// that signs elsewhere — a hardware device, a remote service — can be handed
+// exactly the 32 bytes to sign.
+func ExampleOrderDigest() {
+	order, err := polymarket.BuildOrder(polymarket.UserOrder{
+		TokenID: tokenID,
+		Price:   "0.52",
+		Size:    "100",
+		Side:    polymarket.Buy,
+	}, "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+		polymarket.OrderOptions{TickSize: "0.01", Salt: 479249096354, Timestamp: 1740000000000})
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("building the order", "err", err)
+		return
 	}
-	fmt.Printf("spend %.4f rather than 100, leaving %.4f for the fee\n",
-		got.Amount, got.PlatformFee)
-	// Output: spend 99.0400 rather than 100, leaving 0.9600 for the fee
+	digest, err := polymarket.OrderDigest(order, polymarket.ChainPolygon,
+		polymarket.OrderOptions{TickSize: "0.01"})
+	if err != nil {
+		slog.Error("hashing the order", "err", err)
+		return
+	}
+	fmt.Println(hex.EncodeToString(digest[:]))
+	// Output: 4278b3fc4e6ce6bd2e2e2ce3361fe010d49f64144d47512361bfa4fc3ad92399
 }
 
-// Positions come from the data API, which needs no credentials: anyone can
-// read any wallet's book.
-func ExampleClient_Positions() {
-	var c polymarket.Client
-
-	positions, err := c.Positions(context.Background(), polymarket.PositionsParams{
-		User:  "0x0000000000000000000000000000000000000000",
-		Limit: 10,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	for _, p := range positions {
-		fmt.Printf("%s: %.2f shares worth %.2f USDC\n", p.ConditionID, p.Size, p.CurrentValue)
-	}
+// Addresses are rendered in EIP-55 mixed case, which is a checksum: a typo in
+// an address almost always breaks the capitalisation pattern.
+func ExampleChecksumAddress() {
+	fmt.Println(polymarket.ChecksumAddress("0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed"))
+	// Output: 0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed
 }
 
-// An API error carries the status code, so a rate limit is distinguishable
-// from a bad request without parsing text.
-func ExampleError() {
-	var c polymarket.Client
-
-	_, err := c.OrderBook(context.Background(), "not-a-token-id")
-	var apiErr *polymarket.Error
-	if errors.As(err, &apiErr) {
-		fmt.Println("status", apiErr.StatusCode)
-	}
+// A Session is the shared foundation: one wallet, one http.Client, one retry
+// policy, handed to as many client packages as you need.
+func ExampleNewSession() {
+	// Add polymarket.WithSigner(key) to trade; reads need no wallet.
+	s := polymarket.NewSession(polymarket.DefaultHost,
+		polymarket.WithUserAgent("my-trading-bot/1.0"),
+	)
+	fmt.Println(s.Host(), s.ChainID())
+	// Output: https://clob.polymarket.com 137
 }

@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 ChloePike
 
-package polymarket
+package clob
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"testing"
+
+	polymarket "github.com/ChloePike/go-polymarket"
 )
 
 // recordedRequest captures the HTTP request a test server received, so a
@@ -39,6 +43,36 @@ func recordingServer(t *testing.T, rec *recordedRequest, status int, body string
 	return srv
 }
 
+// clobGoldenAccount is a signing key and the address derived from it, one
+// entry of testdata/vectors.json's "accounts" array — the golden vectors the
+// root package's signing tests are pinned against. testL2Client borrows the
+// first account as a working key; it does not need the file's order and
+// signature vectors, only its accounts.
+type clobGoldenAccount struct {
+	PrivateKey string `json:"privateKey"`
+	Address    string `json:"address"`
+}
+
+// clobGoldenFile is the slice of testdata/vectors.json this package's tests
+// read.
+type clobGoldenFile struct {
+	Accounts []clobGoldenAccount `json:"accounts"`
+}
+
+// loadGolden reads the golden vectors testL2Client needs a signing key from.
+func loadGolden(t *testing.T) clobGoldenFile {
+	t.Helper()
+	b, err := os.ReadFile("../testdata/vectors.json")
+	if err != nil {
+		t.Fatalf("golden vectors: %v", err)
+	}
+	var g clobGoldenFile
+	if err := json.Unmarshal(b, &g); err != nil {
+		t.Fatalf("golden vectors: %v", err)
+	}
+	return g
+}
+
 // testL2Client builds a Client pointed at host with a working Signer and
 // APICreds, so it can send level-2 requests. The key comes from the golden
 // vectors already pinned for signing tests.
@@ -48,15 +82,12 @@ func testL2Client(t *testing.T, host string) *Client {
 	if len(g.Accounts) == 0 {
 		t.Fatal("golden accounts are empty")
 	}
-	key, err := NewPrivateKey(g.Accounts[0].PrivateKey)
+	key, err := polymarket.NewPrivateKey(g.Accounts[0].PrivateKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Client{
-		Host:   host,
-		Signer: key,
-		Creds:  &APICreds{Key: "key-1", Secret: "PLoJhxT8V3PMEHtGZFLD9YfKKW3Kx0QfC5wY1qkq_iM=", Passphrase: "pass-1"},
-	}
+	creds := polymarket.APICreds{Key: "key-1", Secret: "PLoJhxT8V3PMEHtGZFLD9YfKKW3Kx0QfC5wY1qkq_iM=", Passphrase: "pass-1"}
+	return New(WithHost(host), WithSigner(key), WithCredentials(creds))
 }
 
 // authHeaderKeys are the headers both authentication levels can set. Level 1
@@ -129,7 +160,7 @@ var currentRewardsMarketsCases = []currentRewardsMarketsCase{
 	{
 		name:       "first page defaults the cursor",
 		cursor:     "",
-		wantCursor: CursorStart,
+		wantCursor: polymarket.CursorStart,
 		status:     http.StatusOK,
 		body:       currentRewardsMarketsBody,
 	},
@@ -154,14 +185,14 @@ func TestCurrentRewardsMarkets(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var rec recordedRequest
 			srv := recordingServer(t, &rec, tc.status, tc.body)
-			c := &Client{Host: srv.URL}
+			c := New(WithHost(srv.URL))
 
 			markets, page, err := c.CurrentRewardsMarkets(context.Background(), tc.cursor)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatal("got nil error, want one")
 				}
-				apiErr, ok := err.(*Error)
+				apiErr, ok := err.(*polymarket.Error)
 				if !ok {
 					t.Fatalf("error type = %T, want *polymarket.Error", err)
 				}
@@ -204,8 +235,8 @@ func TestCurrentRewardsMarkets(t *testing.T) {
 			if len(m.RewardsConfig) != 1 || m.RewardsConfig[0].StartDate != "2026-08-15" {
 				t.Errorf("RewardsConfig = %+v", m.RewardsConfig)
 			}
-			if page.NextCursor != CursorEnd {
-				t.Errorf("NextCursor = %s, want %s", page.NextCursor, CursorEnd)
+			if page.NextCursor != polymarket.CursorEnd {
+				t.Errorf("NextCursor = %s, want %s", page.NextCursor, polymarket.CursorEnd)
 			}
 		})
 	}
@@ -252,7 +283,7 @@ func TestRewardsMarkets(t *testing.T) {
 
 	var rec recordedRequest
 	srv := recordingServer(t, &rec, http.StatusOK, rewardsMarketDetailBody)
-	c := &Client{Host: srv.URL}
+	c := New(WithHost(srv.URL))
 
 	details, page, err := c.RewardsMarkets(context.Background(), conditionID, "")
 	if err != nil {
@@ -263,8 +294,8 @@ func TestRewardsMarkets(t *testing.T) {
 	if rec.Path != wantPath {
 		t.Errorf("path = %s, want %s", rec.Path, wantPath)
 	}
-	if got := rec.Query.Get("next_cursor"); got != CursorStart {
-		t.Errorf("next_cursor = %q, want %q", got, CursorStart)
+	if got := rec.Query.Get("next_cursor"); got != polymarket.CursorStart {
+		t.Errorf("next_cursor = %q, want %q", got, polymarket.CursorStart)
 	}
 	assertNoAuthHeaders(t, rec.Header)
 
@@ -314,7 +345,7 @@ func TestUserRewards(t *testing.T) {
 	srv := recordingServer(t, &rec, http.StatusOK, userRewardsBody)
 	c := testL2Client(t, srv.URL)
 
-	earnings, page, err := c.UserRewards(context.Background(), "2026-08-15", SigEOA, "")
+	earnings, page, err := c.UserRewards(context.Background(), "2026-08-15", polymarket.SigEOA, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,8 +359,8 @@ func TestUserRewards(t *testing.T) {
 	if got := rec.Query.Get("signature_type"); got != "0" {
 		t.Errorf("signature_type = %q, want 0", got)
 	}
-	if got := rec.Query.Get("next_cursor"); got != CursorStart {
-		t.Errorf("next_cursor = %q, want %q", got, CursorStart)
+	if got := rec.Query.Get("next_cursor"); got != polymarket.CursorStart {
+		t.Errorf("next_cursor = %q, want %q", got, polymarket.CursorStart)
 	}
 	assertL2Headers(t, rec.Header)
 
@@ -359,7 +390,7 @@ func TestUserRewardsTotal(t *testing.T) {
 	srv := recordingServer(t, &rec, http.StatusOK, userRewardsTotalBody)
 	c := testL2Client(t, srv.URL)
 
-	earnings, err := c.UserRewardsTotal(context.Background(), "2026-08-15", SigPolyProxy)
+	earnings, err := c.UserRewardsTotal(context.Background(), "2026-08-15", polymarket.SigPolyProxy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +418,7 @@ func TestUserRewardsPercentages(t *testing.T) {
 	srv := recordingServer(t, &rec, http.StatusOK, userRewardsPercentagesBody)
 	c := testL2Client(t, srv.URL)
 
-	pct, err := c.UserRewardsPercentages(context.Background(), SigEIP1271)
+	pct, err := c.UserRewardsPercentages(context.Background(), polymarket.SigEIP1271)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -457,7 +488,7 @@ var userRewardsMarketsCases = []userRewardsMarketsCase{
 		name: "no optional filters",
 		params: RewardsMarketsParams{
 			Date:          "2026-08-15",
-			SignatureType: SigEOA,
+			SignatureType: polymarket.SigEOA,
 		},
 		absentKeys: []string{"order_by", "position", "no_competition"},
 	},
@@ -465,7 +496,7 @@ var userRewardsMarketsCases = []userRewardsMarketsCase{
 		name: "every optional filter set",
 		params: RewardsMarketsParams{
 			Date:          "2026-08-15",
-			SignatureType: SigEOA,
+			SignatureType: polymarket.SigEOA,
 			OrderBy:       "earnings",
 			Position:      "maker",
 			NoCompetition: true,
@@ -516,8 +547,8 @@ func TestUserRewardsMarkets(t *testing.T) {
 			if len(r.Earnings) != 1 || string(r.Earnings[0].Earnings) != "12.5" {
 				t.Errorf("Earnings = %+v", r.Earnings)
 			}
-			if page.NextCursor != CursorEnd {
-				t.Errorf("NextCursor = %s, want %s", page.NextCursor, CursorEnd)
+			if page.NextCursor != polymarket.CursorEnd {
+				t.Errorf("NextCursor = %s, want %s", page.NextCursor, polymarket.CursorEnd)
 			}
 		})
 	}

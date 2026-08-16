@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 ChloePike
 
-package polymarket
+package clob
 
 import (
 	"context"
@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+
+	polymarket "github.com/ChloePike/go-polymarket"
 )
 
 const testBuilderCode = "0x11adfa1337e1d4049b93be13548465015ac613efe3f8e7cee2347170f4ae5417"
@@ -49,7 +51,7 @@ func TestBuilderFees(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := &Client{Host: srv.URL}
+	c := New(WithHost(srv.URL))
 	got, err := c.BuilderFees(context.Background(), testBuilderCode)
 	if err != nil {
 		t.Fatal(err)
@@ -70,9 +72,9 @@ func TestBuilderFeesRejectsEmptyOrZeroCode(t *testing.T) {
 		t.Fatalf("unexpected request: %s %s", r.Method, r.URL)
 	}))
 	defer srv.Close()
-	c := &Client{Host: srv.URL}
+	c := New(WithHost(srv.URL))
 
-	for _, code := range []string{"", ZeroBytes32} {
+	for _, code := range []string{"", polymarket.ZeroBytes32} {
 		if _, err := c.BuilderFees(context.Background(), code); err == nil {
 			t.Errorf("BuilderFees(%q): got nil error", code)
 		}
@@ -86,7 +88,7 @@ func TestBuilderTradesQuery(t *testing.T) {
 			params: BuilderTradeParams{},
 			want: url.Values{
 				"builder_code": {testBuilderCode},
-				"next_cursor":  {CursorStart},
+				"next_cursor":  {polymarket.CursorStart},
 			},
 		},
 		{
@@ -134,7 +136,7 @@ func TestBuilderTradesQuery(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			c := &Client{Host: srv.URL}
+			c := New(WithHost(srv.URL))
 			if _, _, err := c.BuilderTrades(context.Background(), testBuilderCode, tc.params); err != nil {
 				t.Fatal(err)
 			}
@@ -185,7 +187,7 @@ func TestBuilderTradesDecode(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := &Client{Host: srv.URL}
+	c := New(WithHost(srv.URL))
 	trades, page, err := c.BuilderTrades(context.Background(), testBuilderCode, BuilderTradeParams{})
 	if err != nil {
 		t.Fatal(err)
@@ -200,8 +202,8 @@ func TestBuilderTradesDecode(t *testing.T) {
 	if tr.BuilderCode != testBuilderCode {
 		t.Errorf("BuilderCode = %s, want %s", tr.BuilderCode, testBuilderCode)
 	}
-	if page.NextCursor != CursorEnd {
-		t.Errorf("NextCursor = %s, want %s", page.NextCursor, CursorEnd)
+	if page.NextCursor != polymarket.CursorEnd {
+		t.Errorf("NextCursor = %s, want %s", page.NextCursor, polymarket.CursorEnd)
 	}
 	if page.Limit != 300 || page.Count != 1 {
 		t.Errorf("Limit=%d Count=%d, want 300, 1", page.Limit, page.Count)
@@ -213,9 +215,9 @@ func TestBuilderTradesRejectsEmptyOrZeroCode(t *testing.T) {
 		t.Fatalf("unexpected request: %s %s", r.Method, r.URL)
 	}))
 	defer srv.Close()
-	c := &Client{Host: srv.URL}
+	c := New(WithHost(srv.URL))
 
-	for _, code := range []string{"", ZeroBytes32} {
+	for _, code := range []string{"", polymarket.ZeroBytes32} {
 		if _, _, err := c.BuilderTrades(context.Background(), code, BuilderTradeParams{}); err == nil {
 			t.Errorf("BuilderTrades(%q): got nil error", code)
 		}

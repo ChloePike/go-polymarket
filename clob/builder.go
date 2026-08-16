@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 ChloePike
 
-package polymarket
+package clob
 
 import (
 	"context"
 	"fmt"
 	"net/url"
+
+	polymarket "github.com/ChloePike/go-polymarket"
 )
 
 // A builder code is a bytes32 identifier written into an order's signed
@@ -41,7 +43,7 @@ func (c *Client) BuilderFees(ctx context.Context, code string) (BuilderFeeRates,
 		return BuilderFeeRates{}, err
 	}
 	var out BuilderFeeRates
-	err := c.get(ctx, epBuilderFees+code, nil, &out)
+	err := c.session.Get(ctx, epBuilderFees+code, nil, &out)
 	return out, err
 }
 
@@ -132,7 +134,7 @@ func (c *Client) BuilderTrades(ctx context.Context, code string, params BuilderT
 	q.Set("next_cursor", cursorOrStart(params.NextCursor))
 
 	var page builderTradesPage
-	if err := c.get(ctx, epBuilderTrades, q, &page); err != nil {
+	if err := c.session.Get(ctx, epBuilderTrades, q, &page); err != nil {
 		return nil, Pagination{}, err
 	}
 	return page.Data, page.Pagination, nil
@@ -142,7 +144,7 @@ func (c *Client) BuilderTrades(ctx context.Context, code string, params BuilderT
 // request is sent: empty and the all-zero bytes32 both mean "no builder",
 // which /builder/trades and /fees/builder-fees/ have nothing to report for.
 func checkBuilderCode(code string) error {
-	if code == "" || code == ZeroBytes32 {
+	if code == "" || code == polymarket.ZeroBytes32 {
 		return fmt.Errorf("polymarket: builder code is required and cannot be zero")
 	}
 	return nil

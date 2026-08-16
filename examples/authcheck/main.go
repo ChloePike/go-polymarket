@@ -20,16 +20,16 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
 	polymarket "github.com/ChloePike/go-polymarket"
+	"github.com/ChloePike/go-polymarket/clob"
 )
 
 func main() {
-	log.SetFlags(0)
-	log.SetPrefix("authcheck: ")
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
 	keyHex := flag.String("key", "", "private key to use; empty generates a throwaway one")
 	flag.Parse()
@@ -41,7 +41,8 @@ func main() {
 	if hexKey == "" {
 		raw := make([]byte, 32)
 		if _, err := rand.Read(raw); err != nil {
-			log.Fatal(err)
+			slog.Error("generating a key", "err", err)
+			os.Exit(1)
 		}
 		hexKey = hex.EncodeToString(raw)
 		fmt.Println("generated a throwaway key; it is discarded on exit")
@@ -49,30 +50,33 @@ func main() {
 
 	key, err := polymarket.NewPrivateKey(hexKey)
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("parsing the key", "err", err)
+		os.Exit(1)
 	}
 	fmt.Printf("address            %s\n", key.Address())
 
-	c := &polymarket.Client{Signer: key}
+	c := clob.New(clob.WithSigner(key))
 
 	// Level 1: an EIP-712 signature over the ClobAuth payload, in exchange
 	// for credentials.
 	creds, err := c.CreateOrDeriveAPIKey(ctx)
 	if err != nil {
-		log.Fatalf("level 1 failed: %v", err)
+		slog.Error("level 1 failed", "err", err)
+		os.Exit(1)
 	}
 	fmt.Printf("level 1            ok, api key %s\n", creds.Key)
 
 	// Level 2: an HMAC over the request line, using those credentials.
-	orders, _, err := c.OpenOrders(ctx, polymarket.OpenOrderParams{}, "")
+	orders, _, err := c.OpenOrders(ctx, clob.OpenOrderParams{}, "")
 	if err != nil {
-		log.Fatalf("level 2 failed: %v", err)
+		slog.Error("level 2 failed", "err", err)
+		os.Exit(1)
 	}
 	fmt.Printf("level 2            ok, %d open orders\n", len(orders))
 
 	// The negative control. Without it, a level-1 pass could mean the
 	// exchange is not checking anything.
-	bad := &polymarket.Client{Signer: corrupt{key}}
+	bad := clob.New(clob.WithSigner(corrupt{key}))
 	if _, err := bad.CreateOrDeriveAPIKey(ctx); err == nil {
 		fmt.Println("negative control   FAILED: a corrupted signature was accepted")
 		os.Exit(1)

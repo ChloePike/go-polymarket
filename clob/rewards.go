@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 ChloePike
 
-package polymarket
+package clob
 
 import (
 	"context"
 	"encoding/json"
 	"net/url"
 	"strconv"
+
+	polymarket "github.com/ChloePike/go-polymarket"
 )
 
 // Liquidity rewards pay market makers for resting orders close to the
@@ -40,7 +42,7 @@ import (
 // rewards endpoint takes it: the same wallet trades under different maker
 // addresses as a plain EOA versus a Polymarket proxy or Gnosis Safe, so
 // earnings are scoped by which one signed.
-func setSignatureType(q url.Values, t SignatureType) {
+func setSignatureType(q url.Values, t polymarket.SignatureType) {
 	q.Set("signature_type", strconv.Itoa(int(t)))
 }
 
@@ -196,14 +198,14 @@ type rewardsMarketsPage struct {
 // described on setSignatureType. cursor pages the result; pass "" for the
 // first page and keep requesting with the returned Pagination.NextCursor
 // until it equals CursorEnd.
-func (c *Client) UserRewards(ctx context.Context, date string, sigType SignatureType, cursor string) ([]RewardsUserEarning, Pagination, error) {
+func (c *Client) UserRewards(ctx context.Context, date string, sigType polymarket.SignatureType, cursor string) ([]RewardsUserEarning, Pagination, error) {
 	q := url.Values{}
 	q.Set("date", date)
 	setSignatureType(q, sigType)
 	q.Set("next_cursor", cursorOrStart(cursor))
 
 	var page rewardsUserPage
-	if err := c.getL2(ctx, epRewardsUser, q, &page); err != nil {
+	if err := c.session.GetL2(ctx, epRewardsUser, q, &page); err != nil {
 		return nil, Pagination{}, err
 	}
 	return page.Data, page.Pagination, nil
@@ -215,13 +217,13 @@ func (c *Client) UserRewards(ctx context.Context, date string, sigType Signature
 // result in one call.
 //
 // date and sigType are as in UserRewards.
-func (c *Client) UserRewardsTotal(ctx context.Context, date string, sigType SignatureType) ([]RewardsUserTotalEarning, error) {
+func (c *Client) UserRewardsTotal(ctx context.Context, date string, sigType polymarket.SignatureType) ([]RewardsUserTotalEarning, error) {
 	q := url.Values{}
 	q.Set("date", date)
 	setSignatureType(q, sigType)
 
 	var out []RewardsUserTotalEarning
-	if err := c.getL2(ctx, epRewardsUserTotal, q, &out); err != nil {
+	if err := c.session.GetL2(ctx, epRewardsUserTotal, q, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -232,12 +234,12 @@ func (c *Client) UserRewardsTotal(ctx context.Context, date string, sigType Sign
 // credentials.
 //
 // sigType is as in UserRewards.
-func (c *Client) UserRewardsPercentages(ctx context.Context, sigType SignatureType) (RewardsPercentages, error) {
+func (c *Client) UserRewardsPercentages(ctx context.Context, sigType polymarket.SignatureType) (RewardsPercentages, error) {
 	q := url.Values{}
 	setSignatureType(q, sigType)
 
 	var out RewardsPercentages
-	if err := c.getL2(ctx, epRewardsUserPercentages, q, &out); err != nil {
+	if err := c.session.GetL2(ctx, epRewardsUserPercentages, q, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -251,7 +253,7 @@ type RewardsMarketsParams struct {
 
 	// SignatureType picks which of the account's maker addresses to report
 	// on, as described on setSignatureType.
-	SignatureType SignatureType
+	SignatureType polymarket.SignatureType
 
 	// OrderBy sorts the result. The API defines the accepted values; this
 	// client passes the string through unvalidated. Empty omits the
@@ -289,7 +291,7 @@ func (c *Client) UserRewardsMarkets(ctx context.Context, p RewardsMarketsParams)
 	}
 
 	var page rewardsUserMarketsPage
-	if err := c.getL2(ctx, epRewardsUserMarkets, q, &page); err != nil {
+	if err := c.session.GetL2(ctx, epRewardsUserMarkets, q, &page); err != nil {
 		return nil, Pagination{}, err
 	}
 	return page.Data, page.Pagination, nil
@@ -306,7 +308,7 @@ func (c *Client) CurrentRewardsMarkets(ctx context.Context, cursor string) ([]Re
 	q.Set("next_cursor", cursorOrStart(cursor))
 
 	var page rewardsMarketsCurrentPage
-	if err := c.get(ctx, epRewardsMarketsCurrent, q, &page); err != nil {
+	if err := c.session.Get(ctx, epRewardsMarketsCurrent, q, &page); err != nil {
 		return nil, Pagination{}, err
 	}
 	return page.Data, page.Pagination, nil
@@ -324,7 +326,7 @@ func (c *Client) RewardsMarkets(ctx context.Context, conditionID, cursor string)
 	q.Set("next_cursor", cursorOrStart(cursor))
 
 	var page rewardsMarketsPage
-	if err := c.get(ctx, epRewardsMarkets+conditionID, q, &page); err != nil {
+	if err := c.session.Get(ctx, epRewardsMarkets+conditionID, q, &page); err != nil {
 		return nil, Pagination{}, err
 	}
 	return page.Data, page.Pagination, nil

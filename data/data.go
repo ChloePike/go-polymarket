@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 ChloePike
 
-package polymarket
+package data
 
 import (
 	"context"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+
+	polymarket "github.com/ChloePike/go-polymarket"
 )
 
 // This file covers the Polymarket data API (DataHost): portfolio positions,
@@ -16,9 +17,9 @@ import (
 // endpoint here is a public, unauthenticated GET — none needs a Signer or
 // APICreds.
 //
-// protocol.go does not yet declare paths for this host (its epXxx constants
-// are all CLOB paths), so the data API's paths are declared below, next to
-// the methods that use them.
+// The root polymarket package declares only the host addresses, not the
+// per-endpoint paths, so the data API's paths are declared below, next to the
+// methods that use them.
 const (
 	epDataHealth              = "/"
 	epDataPositions           = "/positions"
@@ -37,16 +38,9 @@ const (
 	epDataBuildersVolume      = "/v1/builders/volume"
 )
 
-// dataGet issues an unauthenticated GET against the data API host. c.get
-// always targets the CLOB host, so the data endpoints call c.do directly with
-// host set to c.dataHost().
-func (c *Client) dataGet(ctx context.Context, path string, q url.Values, out any) error {
-	return c.do(ctx, request{method: http.MethodGet, host: c.dataHost(), path: path, query: q, out: out})
-}
-
 // Query-building helpers. A zero value (empty string, 0, false, nil slice)
 // means "omit the parameter and let the server apply its default" throughout
-// this file, matching the zero-means-default convention OrderOptions uses.
+// this file, matching the zero-means-default convention polymarket.OrderOptions uses.
 
 func dataSetStr(q url.Values, key, val string) {
 	if val != "" {
@@ -95,13 +89,14 @@ type dataHealthResponse struct {
 }
 
 // DataHealth reports the data API's own health check. It needs no
-// authentication. Named DataHealth rather than Health because a Client talks
-// to four hosts, and the CLOB has its own /ok health check.
+// authentication. The name predates the package split: it disambiguates from
+// the CLOB's own /ok health check, back when one Client served all four
+// hosts, and is kept as-is across the move.
 //
 // GET /
 func (c *Client) DataHealth(ctx context.Context) (string, error) {
 	var out dataHealthResponse
-	if err := c.dataGet(ctx, epDataHealth, nil, &out); err != nil {
+	if err := c.session.Get(ctx, epDataHealth, nil, &out); err != nil {
 		return "", err
 	}
 	return out.Data, nil
@@ -198,7 +193,7 @@ func (c *Client) Positions(ctx context.Context, p PositionsParams) ([]Position, 
 	dataSetStr(q, "sortDirection", p.SortDirection)
 	dataSetStr(q, "title", p.Title)
 	var out []Position
-	if err := c.dataGet(ctx, epDataPositions, q, &out); err != nil {
+	if err := c.session.Get(ctx, epDataPositions, q, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -265,7 +260,7 @@ func (c *Client) ClosedPositions(ctx context.Context, p ClosedPositionsParams) (
 	dataSetStr(q, "sortBy", p.SortBy)
 	dataSetStr(q, "sortDirection", p.SortDirection)
 	var out []ClosedPosition
-	if err := c.dataGet(ctx, epDataClosedPositions, q, &out); err != nil {
+	if err := c.session.Get(ctx, epDataClosedPositions, q, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -277,12 +272,12 @@ func (c *Client) ClosedPositions(ctx context.Context, p ClosedPositionsParams) (
 // epTrades = /data/trades) is expected to claim that name for its own rows,
 // and "fill" is the accurate term for what this endpoint reports.
 type Fill struct {
-	ProxyWallet string  `json:"proxyWallet"`
-	Side        Side    `json:"side"`
-	Asset       string  `json:"asset"`
-	ConditionID string  `json:"conditionId"`
-	Size        float64 `json:"size"`
-	Price       float64 `json:"price"`
+	ProxyWallet string          `json:"proxyWallet"`
+	Side        polymarket.Side `json:"side"`
+	Asset       string          `json:"asset"`
+	ConditionID string          `json:"conditionId"`
+	Size        float64         `json:"size"`
+	Price       float64         `json:"price"`
 	// Timestamp is Unix seconds.
 	Timestamp int64  `json:"timestamp"`
 	Title     string `json:"title"`
@@ -331,7 +326,7 @@ type FillsParams struct {
 	// platform-wide feed.
 	User string
 	// Side is BUY or SELL. Empty means both.
-	Side Side
+	Side polymarket.Side
 }
 
 // Fills reports executed trade fills: one wallet's, or, with every filter
@@ -353,7 +348,7 @@ func (c *Client) Fills(ctx context.Context, p FillsParams) ([]Fill, error) {
 	dataSetStr(q, "user", p.User)
 	dataSetStr(q, "side", string(p.Side))
 	var out []Fill
-	if err := c.dataGet(ctx, epDataTrades, q, &out); err != nil {
+	if err := c.session.Get(ctx, epDataTrades, q, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -387,20 +382,20 @@ type Activity struct {
 	TransactionHash string  `json:"transactionHash"`
 	// Price and Side are meaningful only when Type is ActivityTrade: on any
 	// other row Price is 0 and Side is the empty string.
-	Price                 float64 `json:"price"`
-	Asset                 string  `json:"asset"`
-	Side                  Side    `json:"side"`
-	OutcomeIndex          int     `json:"outcomeIndex"`
-	Title                 string  `json:"title"`
-	Slug                  string  `json:"slug"`
-	Icon                  string  `json:"icon"`
-	EventSlug             string  `json:"eventSlug"`
-	Outcome               string  `json:"outcome"`
-	Name                  string  `json:"name"`
-	Pseudonym             string  `json:"pseudonym"`
-	Bio                   string  `json:"bio"`
-	ProfileImage          string  `json:"profileImage"`
-	ProfileImageOptimized string  `json:"profileImageOptimized"`
+	Price                 float64         `json:"price"`
+	Asset                 string          `json:"asset"`
+	Side                  polymarket.Side `json:"side"`
+	OutcomeIndex          int             `json:"outcomeIndex"`
+	Title                 string          `json:"title"`
+	Slug                  string          `json:"slug"`
+	Icon                  string          `json:"icon"`
+	EventSlug             string          `json:"eventSlug"`
+	Outcome               string          `json:"outcome"`
+	Name                  string          `json:"name"`
+	Pseudonym             string          `json:"pseudonym"`
+	Bio                   string          `json:"bio"`
+	ProfileImage          string          `json:"profileImage"`
+	ProfileImageOptimized string          `json:"profileImageOptimized"`
 }
 
 // ActivityParams filters and sorts GET /activity.
@@ -430,7 +425,7 @@ type ActivityParams struct {
 	// SortDirection is ASC or DESC. Empty means the server default, DESC.
 	SortDirection string
 	// Side is BUY or SELL. Empty means both; meaningful only for TRADE rows.
-	Side Side
+	Side polymarket.Side
 }
 
 // Activity reports a wallet's full on-chain activity feed: trades, splits,
@@ -457,7 +452,7 @@ func (c *Client) Activity(ctx context.Context, p ActivityParams) ([]Activity, er
 	dataSetStr(q, "sortDirection", p.SortDirection)
 	dataSetStr(q, "side", string(p.Side))
 	var out []Activity
-	if err := c.dataGet(ctx, epDataActivity, q, &out); err != nil {
+	if err := c.session.Get(ctx, epDataActivity, q, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -510,7 +505,7 @@ func (c *Client) Holders(ctx context.Context, p HoldersParams) ([]TokenHolders, 
 	dataSetInt(q, "limit", p.Limit)
 	dataSetInt(q, "minBalance", p.MinBalance)
 	var out []TokenHolders
-	if err := c.dataGet(ctx, epDataHolders, q, &out); err != nil {
+	if err := c.session.Get(ctx, epDataHolders, q, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -585,7 +580,7 @@ func (c *Client) MarketPositions(ctx context.Context, p MarketPositionsParams) (
 	dataSetInt(q, "limit", p.Limit)
 	dataSetInt(q, "offset", p.Offset)
 	var out []TokenMarketPositions
-	if err := c.dataGet(ctx, epDataMarketPositions, q, &out); err != nil {
+	if err := c.session.Get(ctx, epDataMarketPositions, q, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -608,7 +603,7 @@ func (c *Client) Value(ctx context.Context, user string, market []string) ([]Por
 	dataSetStr(q, "user", user)
 	dataSetCSV(q, "market", market)
 	var out []PortfolioValue
-	if err := c.dataGet(ctx, epDataValue, q, &out); err != nil {
+	if err := c.session.Get(ctx, epDataValue, q, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -629,7 +624,7 @@ func (c *Client) TradedCount(ctx context.Context, user string) (Traded, error) {
 	q := url.Values{}
 	dataSetStr(q, "user", user)
 	var out Traded
-	if err := c.dataGet(ctx, epDataTraded, q, &out); err != nil {
+	if err := c.session.Get(ctx, epDataTraded, q, &out); err != nil {
 		return Traded{}, err
 	}
 	return out, nil
@@ -649,7 +644,7 @@ func (c *Client) OpenInterest(ctx context.Context, market []string) ([]OpenInter
 	q := url.Values{}
 	dataSetCSV(q, "market", market)
 	var out []OpenInterest
-	if err := c.dataGet(ctx, epDataOpenInterest, q, &out); err != nil {
+	if err := c.session.Get(ctx, epDataOpenInterest, q, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -678,7 +673,7 @@ func (c *Client) LiveVolume(ctx context.Context, eventID int64) (LiveVolume, err
 	q := url.Values{}
 	dataSetInt64(q, "id", eventID)
 	var out []LiveVolume
-	if err := c.dataGet(ctx, epDataLiveVolume, q, &out); err != nil {
+	if err := c.session.Get(ctx, epDataLiveVolume, q, &out); err != nil {
 		return LiveVolume{}, err
 	}
 	if len(out) == 0 {
@@ -707,7 +702,7 @@ func (c *Client) OtherSizes(ctx context.Context, eventID int64, user string) ([]
 	dataSetInt64(q, "id", eventID)
 	dataSetStr(q, "user", user)
 	var out []OtherSize
-	if err := c.dataGet(ctx, epDataOther, q, &out); err != nil {
+	if err := c.session.Get(ctx, epDataOther, q, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -798,7 +793,7 @@ func (c *Client) Leaderboard(ctx context.Context, p LeaderboardParams) ([]Trader
 	dataSetStr(q, "user", p.User)
 	dataSetStr(q, "userName", p.UserName)
 	var out []TraderLeaderboardEntry
-	if err := c.dataGet(ctx, epDataLeaderboard, q, &out); err != nil {
+	if err := c.session.Get(ctx, epDataLeaderboard, q, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -842,7 +837,7 @@ func (c *Client) BuilderLeaderboard(ctx context.Context, p BuilderLeaderboardPar
 	dataSetInt(q, "limit", p.Limit)
 	dataSetInt(q, "offset", p.Offset)
 	var out []BuilderLeaderboardEntry
-	if err := c.dataGet(ctx, epDataBuildersLeaderboard, q, &out); err != nil {
+	if err := c.session.Get(ctx, epDataBuildersLeaderboard, q, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
@@ -872,7 +867,7 @@ func (c *Client) BuilderVolume(ctx context.Context, period LeaderboardPeriod) ([
 	q := url.Values{}
 	dataSetStr(q, "timePeriod", string(period))
 	var out []BuilderVolumeEntry
-	if err := c.dataGet(ctx, epDataBuildersVolume, q, &out); err != nil {
+	if err := c.session.Get(ctx, epDataBuildersVolume, q, &out); err != nil {
 		return nil, err
 	}
 	return out, nil

@@ -17,17 +17,16 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
 
-	polymarket "github.com/ChloePike/go-polymarket"
+	"github.com/ChloePike/go-polymarket/clob"
 )
 
 func main() {
-	log.SetFlags(0)
-	log.SetPrefix("book: ")
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
 	token := flag.String("token", "", "outcome token id; empty picks an active market")
 	depth := flag.Int("depth", 8, "price levels to show on each side")
@@ -36,27 +35,31 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	var c polymarket.Client
+	c := clob.New()
 
 	id := *token
 	if id == "" {
 		var err error
-		if id, err = pickToken(ctx, &c); err != nil {
-			log.Fatal(err)
+		if id, err = pickToken(ctx, c); err != nil {
+			slog.Error("choosing a market", "err", err)
+			os.Exit(1)
 		}
 	}
 
 	book, err := c.OrderBook(ctx, id)
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("fetching the order book", "token", id, "err", err)
+		os.Exit(1)
 	}
 	mid, err := c.Midpoint(ctx, id)
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("fetching the midpoint", "token", id, "err", err)
+		os.Exit(1)
 	}
 	spread, err := c.Spread(ctx, id)
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("fetching the spread", "token", id, "err", err)
+		os.Exit(1)
 	}
 
 	fmt.Printf("token      %s\n", id)
@@ -87,12 +90,12 @@ func main() {
 // book, not put a political question in front of the reader. Sports fixtures
 // are plentiful, liquid, and beside the point, which is exactly what a demo
 // wants.
-func pickToken(ctx context.Context, c *polymarket.Client) (string, error) {
+func pickToken(ctx context.Context, c *clob.Client) (string, error) {
 	// Fixtures are plentiful but not necessarily on the first page, so walk
 	// a few. Pages handles the cursor sentinels.
 	const scanLimit = 2000
 	scanned := 0
-	for m, err := range polymarket.Pages(ctx, c.SamplingMarkets) {
+	for m, err := range clob.Pages(ctx, c.SamplingMarkets) {
 		if err != nil {
 			return "", err
 		}
@@ -104,7 +107,7 @@ func pickToken(ctx context.Context, c *polymarket.Client) (string, error) {
 		}
 		for _, t := range m.Tokens {
 			if t.TokenID != "" {
-				fmt.Fprintf(os.Stderr, "using %q\n", m.Question)
+				slog.Info("chose a market", "question", m.Question)
 				return t.TokenID, nil
 			}
 		}
@@ -119,15 +122,15 @@ func isFixture(question string) bool {
 }
 
 // topOf returns the n price levels nearest the midpoint.
-func topOf(levels []polymarket.OrderSummary, n int) []polymarket.OrderSummary {
+func topOf(levels []clob.OrderSummary, n int) []clob.OrderSummary {
 	if len(levels) <= n {
 		return levels
 	}
 	return levels[len(levels)-n:]
 }
 
-func reverse(levels []polymarket.OrderSummary) []polymarket.OrderSummary {
-	out := make([]polymarket.OrderSummary, len(levels))
+func reverse(levels []clob.OrderSummary) []clob.OrderSummary {
+	out := make([]clob.OrderSummary, len(levels))
 	for i, l := range levels {
 		out[len(levels)-1-i] = l
 	}

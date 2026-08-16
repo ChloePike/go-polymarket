@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 ChloePike
 
-package polymarket
+package clob
 
 import (
 	"context"
@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+
+	polymarket "github.com/ChloePike/go-polymarket"
 )
 
 // This file is the trading surface: the API-key lifecycle, order submission,
@@ -31,14 +33,14 @@ const (
 // The credentials are deterministic per wallet and nonce: calling this twice
 // returns the same key, and DeriveAPIKey recovers it without creating
 // anything. On success the credentials are stored on the Client.
-func (c *Client) CreateAPIKey(ctx context.Context, nonce int64) (APICreds, error) {
+func (c *Client) CreateAPIKey(ctx context.Context, nonce int64) (polymarket.APICreds, error) {
 	return c.apiKeyRequest(ctx, http.MethodPost, epCreateAPIKey, nonce)
 }
 
 // DeriveAPIKey recovers the level-2 credentials a wallet already has, without
 // creating anything. It needs a Signer. On success the credentials are stored
 // on the Client.
-func (c *Client) DeriveAPIKey(ctx context.Context, nonce int64) (APICreds, error) {
+func (c *Client) DeriveAPIKey(ctx context.Context, nonce int64) (polymarket.APICreds, error) {
 	return c.apiKeyRequest(ctx, http.MethodGet, epDeriveAPIKey, nonce)
 }
 
@@ -46,7 +48,7 @@ func (c *Client) DeriveAPIKey(ctx context.Context, nonce int64) (APICreds, error
 // it creates a key, and falls back to deriving the existing one. This is the
 // call to make at startup. It needs a Signer, and stores the credentials on
 // the Client so later requests authenticate themselves.
-func (c *Client) CreateOrDeriveAPIKey(ctx context.Context) (APICreds, error) {
+func (c *Client) CreateOrDeriveAPIKey(ctx context.Context) (polymarket.APICreds, error) {
 	creds, createErr := c.CreateAPIKey(ctx, 0)
 	if createErr == nil && creds.Key != "" {
 		return creds, nil
@@ -56,30 +58,30 @@ func (c *Client) CreateOrDeriveAPIKey(ctx context.Context) (APICreds, error) {
 		return creds, nil
 	}
 	if createErr != nil {
-		return APICreds{}, fmt.Errorf("polymarket: creating api key: %w (deriving also failed: %v)",
+		return polymarket.APICreds{}, fmt.Errorf("polymarket: creating api key: %w (deriving also failed: %v)",
 			createErr, deriveErr)
 	}
-	return APICreds{}, fmt.Errorf("polymarket: deriving api key: %w", deriveErr)
+	return polymarket.APICreds{}, fmt.Errorf("polymarket: deriving api key: %w", deriveErr)
 }
 
 // apiKeyRequest performs one level-1 key-management call and, when it yields
 // usable credentials, adopts them.
-func (c *Client) apiKeyRequest(ctx context.Context, method, path string, nonce int64) (APICreds, error) {
-	if c.Signer == nil {
-		return APICreds{}, ErrNoSigner
+func (c *Client) apiKeyRequest(ctx context.Context, method, path string, nonce int64) (polymarket.APICreds, error) {
+	if c.session.Signer() == nil {
+		return polymarket.APICreds{}, polymarket.ErrNoSigner
 	}
-	var creds APICreds
-	if err := c.do(ctx, request{
-		method: method,
-		path:   path,
-		query:  nonceQuery(nonce),
-		auth:   authL1,
-		out:    &creds,
+	var creds polymarket.APICreds
+	if err := c.session.Do(ctx, polymarket.Request{
+		Method: method,
+		Path:   path,
+		Query:  nonceQuery(nonce),
+		Auth:   polymarket.AuthL1,
+		Out:    &creds,
 	}); err != nil {
-		return APICreds{}, err
+		return polymarket.APICreds{}, err
 	}
 	if creds.Key != "" {
-		c.Creds = &creds
+		c.session.SetCredentials(creds)
 	}
 	return creds, nil
 }
@@ -101,14 +103,14 @@ type APIKeysResponse struct {
 // APIKeys lists the level-2 keys the account holds. Level 2.
 func (c *Client) APIKeys(ctx context.Context) (APIKeysResponse, error) {
 	var out APIKeysResponse
-	err := c.getL2(ctx, epGetAPIKeys, nil, &out)
+	err := c.session.GetL2(ctx, epGetAPIKeys, nil, &out)
 	return out, err
 }
 
 // DeleteAPIKey revokes the credentials the Client is using. Level 2. After
 // this the stored credentials no longer authenticate anything.
 func (c *Client) DeleteAPIKey(ctx context.Context) error {
-	return c.deleteL2(ctx, epDeleteAPIKey, nil, nil)
+	return c.session.DeleteL2(ctx, epDeleteAPIKey, nil, nil)
 }
 
 // BanStatus reports whether an account is restricted to closing trades.
@@ -120,7 +122,7 @@ type BanStatus struct {
 // open new ones. Level 2.
 func (c *Client) ClosedOnly(ctx context.Context) (BanStatus, error) {
 	var out BanStatus
-	err := c.getL2(ctx, epClosedOnly, nil, &out)
+	err := c.session.GetL2(ctx, epClosedOnly, nil, &out)
 	return out, err
 }
 
@@ -135,7 +137,7 @@ type ReadonlyAPIKey struct {
 // trade on it. Level 2.
 func (c *Client) CreateReadonlyAPIKey(ctx context.Context) (ReadonlyAPIKey, error) {
 	var out ReadonlyAPIKey
-	err := c.postL2(ctx, epCreateReadonlyKey, nil, &out)
+	err := c.session.PostL2(ctx, epCreateReadonlyKey, nil, &out)
 	return out, err
 }
 
@@ -143,17 +145,17 @@ func (c *Client) CreateReadonlyAPIKey(ctx context.Context) (ReadonlyAPIKey, erro
 // Level 2.
 func (c *Client) ReadonlyAPIKeys(ctx context.Context) ([]string, error) {
 	var out []string
-	err := c.getL2(ctx, epGetReadonlyKeys, nil, &out)
+	err := c.session.GetL2(ctx, epGetReadonlyKeys, nil, &out)
 	return out, err
 }
 
 // DeleteReadonlyAPIKey revokes one read-only credential. Level 2.
 func (c *Client) DeleteReadonlyAPIKey(ctx context.Context, key string) error {
-	return c.do(ctx, request{
-		method: http.MethodDelete,
-		path:   epDeleteReadonlyKey,
-		query:  url.Values{"api_key": {key}},
-		auth:   authL2,
+	return c.session.Do(ctx, polymarket.Request{
+		Method: http.MethodDelete,
+		Path:   epDeleteReadonlyKey,
+		Query:  url.Values{"api_key": {key}},
+		Auth:   polymarket.AuthL2,
 	})
 }
 
@@ -168,20 +170,20 @@ type BuilderAPIKey struct {
 // CreateBuilderAPIKey issues a builder credential for the account. Level 2.
 func (c *Client) CreateBuilderAPIKey(ctx context.Context) (BuilderAPIKey, error) {
 	var out BuilderAPIKey
-	err := c.postL2(ctx, epCreateBuilderKey, nil, &out)
+	err := c.session.PostL2(ctx, epCreateBuilderKey, nil, &out)
 	return out, err
 }
 
 // BuilderAPIKeys lists the account's builder credentials. Level 2.
 func (c *Client) BuilderAPIKeys(ctx context.Context) ([]BuilderAPIKey, error) {
 	var out []BuilderAPIKey
-	err := c.getL2(ctx, epGetBuilderKeys, nil, &out)
+	err := c.session.GetL2(ctx, epGetBuilderKeys, nil, &out)
 	return out, err
 }
 
 // RevokeBuilderAPIKey revokes the account's builder credential. Level 2.
 func (c *Client) RevokeBuilderAPIKey(ctx context.Context) error {
-	return c.deleteL2(ctx, epRevokeBuilderKey, nil, nil)
+	return c.session.DeleteL2(ctx, epRevokeBuilderKey, nil, nil)
 }
 
 // CreateOrder resolves a UserOrder into a signed order, ready for PostOrder.
@@ -193,19 +195,19 @@ func (c *Client) RevokeBuilderAPIKey(ctx context.Context) error {
 //
 // Nothing is submitted here. The returned order is signed and therefore
 // authorises a trade, but only PostOrder sends it.
-func (c *Client) CreateOrder(ctx context.Context, u UserOrder, opts OrderOptions) (SignedOrder, error) {
-	if c.Signer == nil {
-		return SignedOrder{}, ErrNoSigner
+func (c *Client) CreateOrder(ctx context.Context, u polymarket.UserOrder, opts polymarket.OrderOptions) (polymarket.SignedOrder, error) {
+	if c.session.Signer() == nil {
+		return polymarket.SignedOrder{}, polymarket.ErrNoSigner
 	}
 	opts, err := c.resolveMarket(ctx, u.TokenID, opts)
 	if err != nil {
-		return SignedOrder{}, err
+		return polymarket.SignedOrder{}, err
 	}
-	order, err := BuildOrder(u, c.Signer.Address(), opts)
+	order, err := polymarket.BuildOrder(u, c.session.Signer().Address(), opts)
 	if err != nil {
-		return SignedOrder{}, err
+		return polymarket.SignedOrder{}, err
 	}
-	return SignOrder(order, c.chainID(), opts, c.Signer)
+	return polymarket.SignOrder(order, c.session.ChainID(), opts, c.session.Signer())
 }
 
 // CreateMarketOrder resolves a MarketOrder into a signed order. A market buy
@@ -214,31 +216,31 @@ func (c *Client) CreateOrder(ctx context.Context, u UserOrder, opts OrderOptions
 // When Price is empty it is filled from the book with MarketPrice, so a caller
 // can name an amount and let the client find the marketable price. As with
 // CreateOrder, nothing is submitted. It needs a Signer.
-func (c *Client) CreateMarketOrder(ctx context.Context, m MarketOrder, opts OrderOptions) (SignedOrder, error) {
-	if c.Signer == nil {
-		return SignedOrder{}, ErrNoSigner
+func (c *Client) CreateMarketOrder(ctx context.Context, m polymarket.MarketOrder, opts polymarket.OrderOptions) (polymarket.SignedOrder, error) {
+	if c.session.Signer() == nil {
+		return polymarket.SignedOrder{}, polymarket.ErrNoSigner
 	}
 	opts, err := c.resolveMarket(ctx, m.TokenID, opts)
 	if err != nil {
-		return SignedOrder{}, err
+		return polymarket.SignedOrder{}, err
 	}
 	if m.Price == "" {
-		price, err := c.MarketPrice(ctx, m.TokenID, m.Side, m.Amount, FOK)
+		price, err := c.MarketPrice(ctx, m.TokenID, m.Side, m.Amount, polymarket.FOK)
 		if err != nil {
-			return SignedOrder{}, fmt.Errorf("polymarket: pricing market order: %w", err)
+			return polymarket.SignedOrder{}, fmt.Errorf("polymarket: pricing market order: %w", err)
 		}
 		m.Price = price
 	}
-	order, err := BuildMarketOrder(m, c.Signer.Address(), opts)
+	order, err := polymarket.BuildMarketOrder(m, c.session.Signer().Address(), opts)
 	if err != nil {
-		return SignedOrder{}, err
+		return polymarket.SignedOrder{}, err
 	}
-	return SignOrder(order, c.chainID(), opts, c.Signer)
+	return polymarket.SignOrder(order, c.session.ChainID(), opts, c.session.Signer())
 }
 
 // resolveMarket fills in the market facts an order needs when the caller left
 // them unset.
-func (c *Client) resolveMarket(ctx context.Context, tokenID string, opts OrderOptions) (OrderOptions, error) {
+func (c *Client) resolveMarket(ctx context.Context, tokenID string, opts polymarket.OrderOptions) (polymarket.OrderOptions, error) {
 	if opts.TickSize == "" {
 		tick, err := c.TickSize(ctx, tokenID)
 		if err != nil {
@@ -263,29 +265,29 @@ func (c *Client) resolveMarket(ctx context.Context, tokenID string, opts OrderOp
 // randomSalt keeps the salt below 2^52: a parser reading this number as a
 // float64 must recover exactly the value that was signed.
 type wireOrder struct {
-	Salt          int64         `json:"salt"`
-	Maker         string        `json:"maker"`
-	Signer        string        `json:"signer"`
-	Taker         string        `json:"taker"`
-	TokenID       string        `json:"tokenId"`
-	MakerAmount   string        `json:"makerAmount"`
-	TakerAmount   string        `json:"takerAmount"`
-	Side          Side          `json:"side"`
-	SignatureType SignatureType `json:"signatureType"`
-	Timestamp     string        `json:"timestamp"`
-	Expiration    string        `json:"expiration"`
-	Metadata      string        `json:"metadata"`
-	Builder       string        `json:"builder"`
-	Signature     string        `json:"signature"`
+	Salt          int64                    `json:"salt"`
+	Maker         string                   `json:"maker"`
+	Signer        string                   `json:"signer"`
+	Taker         string                   `json:"taker"`
+	TokenID       string                   `json:"tokenId"`
+	MakerAmount   string                   `json:"makerAmount"`
+	TakerAmount   string                   `json:"takerAmount"`
+	Side          polymarket.Side          `json:"side"`
+	SignatureType polymarket.SignatureType `json:"signatureType"`
+	Timestamp     string                   `json:"timestamp"`
+	Expiration    string                   `json:"expiration"`
+	Metadata      string                   `json:"metadata"`
+	Builder       string                   `json:"builder"`
+	Signature     string                   `json:"signature"`
 }
 
 // postOrderRequest is the body of a single-order submission.
 type postOrderRequest struct {
-	DeferExec bool      `json:"deferExec"`
-	PostOnly  bool      `json:"postOnly"`
-	Order     wireOrder `json:"order"`
-	Owner     string    `json:"owner"`
-	OrderType OrderType `json:"orderType"`
+	DeferExec bool                 `json:"deferExec"`
+	PostOnly  bool                 `json:"postOnly"`
+	Order     wireOrder            `json:"order"`
+	Owner     string               `json:"owner"`
+	OrderType polymarket.OrderType `json:"orderType"`
 }
 
 // OrderResponse is what the exchange says about a submitted order.
@@ -327,21 +329,21 @@ var ErrPostOnlyMarketOrder = fmt.Errorf("polymarket: postOnly cannot be used wit
 //
 // This spends money. The order is live on the book the moment it is accepted,
 // and a marketable one may fill before this call returns.
-func (c *Client) PostOrder(ctx context.Context, o SignedOrder, orderType OrderType, opts SubmitOptions) (OrderResponse, error) {
+func (c *Client) PostOrder(ctx context.Context, o polymarket.SignedOrder, orderType polymarket.OrderType, opts SubmitOptions) (OrderResponse, error) {
 	body, err := submissionBody(o, orderType, c.owner(), opts)
 	if err != nil {
 		return OrderResponse{}, err
 	}
 	var out OrderResponse
-	err = c.postL2(ctx, epPostOrder, body, &out)
+	err = c.session.PostL2(ctx, epPostOrder, body, &out)
 	return out, err
 }
 
 // OrderSubmission pairs a signed order with the time in force it is submitted
 // under, for PostOrders.
 type OrderSubmission struct {
-	Order     SignedOrder
-	OrderType OrderType
+	Order     polymarket.SignedOrder
+	OrderType polymarket.OrderType
 }
 
 // PostOrders submits several signed orders in one request. Level 2.
@@ -362,13 +364,13 @@ func (c *Client) PostOrders(ctx context.Context, orders []OrderSubmission, opts 
 		bodies = append(bodies, body)
 	}
 	var out []OrderResponse
-	err := c.postL2(ctx, epPostOrders, bodies, &out)
+	err := c.session.PostL2(ctx, epPostOrders, bodies, &out)
 	return out, err
 }
 
 // submissionBody renders a signed order as the exchange expects it.
-func submissionBody(o SignedOrder, orderType OrderType, owner string, opts SubmitOptions) (postOrderRequest, error) {
-	if opts.PostOnly && (orderType == FOK || orderType == FAK) {
+func submissionBody(o polymarket.SignedOrder, orderType polymarket.OrderType, owner string, opts SubmitOptions) (postOrderRequest, error) {
+	if opts.PostOnly && (orderType == polymarket.FOK || orderType == polymarket.FAK) {
 		return postOrderRequest{}, ErrPostOnlyMarketOrder
 	}
 	if o.Signature == "" {
@@ -404,10 +406,11 @@ func submissionBody(o SignedOrder, orderType OrderType, owner string, opts Submi
 
 // owner is the API key an order is attributed to.
 func (c *Client) owner() string {
-	if c.Creds == nil {
+	creds := c.session.Credentials()
+	if creds == nil {
 		return ""
 	}
-	return c.Creds.Key
+	return creds.Key
 }
 
 // CancelResponse reports which cancellations took effect.
@@ -427,7 +430,7 @@ type cancelOrderRequest struct {
 // CancelOrder cancels one resting order. Level 2.
 func (c *Client) CancelOrder(ctx context.Context, orderID string) (CancelResponse, error) {
 	var out CancelResponse
-	err := c.deleteL2(ctx, epCancelOrder, cancelOrderRequest{OrderID: orderID}, &out)
+	err := c.session.DeleteL2(ctx, epCancelOrder, cancelOrderRequest{OrderID: orderID}, &out)
 	return out, err
 }
 
@@ -435,7 +438,7 @@ func (c *Client) CancelOrder(ctx context.Context, orderID string) (CancelRespons
 func (c *Client) CancelOrders(ctx context.Context, orderIDs []string) (CancelResponse, error) {
 	var out CancelResponse
 	// The body is a bare JSON array of ids, not an object wrapping them.
-	err := c.deleteL2(ctx, epCancelOrders, orderIDs, &out)
+	err := c.session.DeleteL2(ctx, epCancelOrders, orderIDs, &out)
 	return out, err
 }
 
@@ -443,7 +446,7 @@ func (c *Client) CancelOrders(ctx context.Context, orderIDs []string) (CancelRes
 // Level 2.
 func (c *Client) CancelAll(ctx context.Context) (CancelResponse, error) {
 	var out CancelResponse
-	err := c.deleteL2(ctx, epCancelAll, nil, &out)
+	err := c.session.DeleteL2(ctx, epCancelAll, nil, &out)
 	return out, err
 }
 
@@ -461,33 +464,33 @@ func (c *Client) CancelMarketOrders(ctx context.Context, p MarketCancelParams) (
 		return CancelResponse{}, fmt.Errorf("polymarket: CancelMarketOrders needs a market or an asset id")
 	}
 	var out CancelResponse
-	err := c.deleteL2(ctx, epCancelMarketOrders, p, &out)
+	err := c.session.DeleteL2(ctx, epCancelMarketOrders, p, &out)
 	return out, err
 }
 
 // An OpenOrder is one of the account's orders as the exchange holds it.
 type OpenOrder struct {
-	ID              string   `json:"id"`
-	Status          string   `json:"status"`
-	Owner           string   `json:"owner"`
-	MakerAddress    string   `json:"maker_address"`
-	Market          string   `json:"market"`
-	AssetID         string   `json:"asset_id"`
-	Side            Side     `json:"side"`
-	OriginalSize    string   `json:"original_size"`
-	SizeMatched     string   `json:"size_matched"`
-	Price           string   `json:"price"`
-	AssociateTrades []string `json:"associate_trades"`
-	Outcome         string   `json:"outcome"`
-	CreatedAt       int64    `json:"created_at"`
-	Expiration      string   `json:"expiration"`
-	OrderType       string   `json:"order_type"`
+	ID              string          `json:"id"`
+	Status          string          `json:"status"`
+	Owner           string          `json:"owner"`
+	MakerAddress    string          `json:"maker_address"`
+	Market          string          `json:"market"`
+	AssetID         string          `json:"asset_id"`
+	Side            polymarket.Side `json:"side"`
+	OriginalSize    string          `json:"original_size"`
+	SizeMatched     string          `json:"size_matched"`
+	Price           string          `json:"price"`
+	AssociateTrades []string        `json:"associate_trades"`
+	Outcome         string          `json:"outcome"`
+	CreatedAt       int64           `json:"created_at"`
+	Expiration      string          `json:"expiration"`
+	OrderType       string          `json:"order_type"`
 }
 
 // Order reports one of the account's orders by id. Level 2.
 func (c *Client) Order(ctx context.Context, orderID string) (OpenOrder, error) {
 	var out OpenOrder
-	err := c.getL2(ctx, epGetOrder+orderID, nil, &out)
+	err := c.session.GetL2(ctx, epGetOrder+orderID, nil, &out)
 	return out, err
 }
 
@@ -522,7 +525,7 @@ func (c *Client) OpenOrders(ctx context.Context, p OpenOrderParams, cursor strin
 	q := p.query()
 	q.Set("next_cursor", cursorOrStart(cursor))
 	var page openOrdersPage
-	if err := c.getL2(ctx, epOpenOrders, q, &page); err != nil {
+	if err := c.session.GetL2(ctx, epOpenOrders, q, &page); err != nil {
 		return nil, Pagination{}, err
 	}
 	return page.Data, page.Pagination, nil
@@ -533,7 +536,7 @@ func (c *Client) OpenOrders(ctx context.Context, p OpenOrderParams, cursor strin
 func (c *Client) PreMigrationOrders(ctx context.Context, cursor string) ([]OpenOrder, Pagination, error) {
 	q := url.Values{"next_cursor": {cursorOrStart(cursor)}}
 	var page openOrdersPage
-	if err := c.getL2(ctx, epPreMigrationOrders, q, &page); err != nil {
+	if err := c.session.GetL2(ctx, epPreMigrationOrders, q, &page); err != nil {
 		return nil, Pagination{}, err
 	}
 	return page.Data, page.Pagination, nil
@@ -553,24 +556,24 @@ type MakerOrder struct {
 
 // A Trade is one fill the account took part in.
 type Trade struct {
-	ID              string       `json:"id"`
-	TakerOrderID    string       `json:"taker_order_id"`
-	Market          string       `json:"market"`
-	AssetID         string       `json:"asset_id"`
-	Side            Side         `json:"side"`
-	Size            string       `json:"size"`
-	FeeRateBps      string       `json:"fee_rate_bps"`
-	Price           string       `json:"price"`
-	Status          string       `json:"status"`
-	MatchTime       string       `json:"match_time"`
-	LastUpdate      string       `json:"last_update"`
-	Outcome         string       `json:"outcome"`
-	BucketIndex     int          `json:"bucket_index"`
-	Owner           string       `json:"owner"`
-	MakerAddress    string       `json:"maker_address"`
-	MakerOrders     []MakerOrder `json:"maker_orders"`
-	TransactionHash string       `json:"transaction_hash,omitempty"`
-	ErrMsg          string       `json:"err_msg,omitempty"`
+	ID              string          `json:"id"`
+	TakerOrderID    string          `json:"taker_order_id"`
+	Market          string          `json:"market"`
+	AssetID         string          `json:"asset_id"`
+	Side            polymarket.Side `json:"side"`
+	Size            string          `json:"size"`
+	FeeRateBps      string          `json:"fee_rate_bps"`
+	Price           string          `json:"price"`
+	Status          string          `json:"status"`
+	MatchTime       string          `json:"match_time"`
+	LastUpdate      string          `json:"last_update"`
+	Outcome         string          `json:"outcome"`
+	BucketIndex     int             `json:"bucket_index"`
+	Owner           string          `json:"owner"`
+	MakerAddress    string          `json:"maker_address"`
+	MakerOrders     []MakerOrder    `json:"maker_orders"`
+	TransactionHash string          `json:"transaction_hash,omitempty"`
+	ErrMsg          string          `json:"err_msg,omitempty"`
 	// TraderSide is TAKER when the account crossed the spread and MAKER when
 	// it was rested on the book.
 	TraderSide string `json:"trader_side"`
@@ -610,7 +613,7 @@ func (c *Client) Trades(ctx context.Context, p TradeParams, cursor string) ([]Tr
 	q := p.query()
 	q.Set("next_cursor", cursorOrStart(cursor))
 	var page tradesPage
-	if err := c.getL2(ctx, epTrades, q, &page); err != nil {
+	if err := c.session.GetL2(ctx, epTrades, q, &page); err != nil {
 		return nil, Pagination{}, err
 	}
 	return page.Data, page.Pagination, nil
@@ -625,7 +628,7 @@ type OrderScoring struct {
 // Level 2.
 func (c *Client) IsOrderScoring(ctx context.Context, orderID string) (OrderScoring, error) {
 	var out OrderScoring
-	err := c.getL2(ctx, epOrderScoring, url.Values{"order_id": {orderID}}, &out)
+	err := c.session.GetL2(ctx, epOrderScoring, url.Values{"order_id": {orderID}}, &out)
 	return out, err
 }
 
@@ -637,7 +640,7 @@ type OrdersScoring map[string]bool
 func (c *Client) AreOrdersScoring(ctx context.Context, orderIDs []string) (OrdersScoring, error) {
 	var out OrdersScoring
 	// The body is a bare JSON array of ids.
-	err := c.postL2(ctx, epOrdersScoring, orderIDs, &out)
+	err := c.session.PostL2(ctx, epOrdersScoring, orderIDs, &out)
 	return out, err
 }
 
@@ -656,7 +659,7 @@ type BalanceAllowanceParams struct {
 	TokenID   string
 }
 
-func (p BalanceAllowanceParams) query(sig SignatureType) url.Values {
+func (p BalanceAllowanceParams) query(sig polymarket.SignatureType) url.Values {
 	q := url.Values{"asset_type": {string(p.AssetType)}}
 	setIf(q, "token_id", p.TokenID)
 	q.Set("signature_type", strconv.Itoa(int(sig)))
@@ -665,9 +668,9 @@ func (p BalanceAllowanceParams) query(sig SignatureType) url.Values {
 
 // BalanceAllowance reports the account's balance and allowance for one asset.
 // Level 2.
-func (c *Client) BalanceAllowance(ctx context.Context, p BalanceAllowanceParams, sig SignatureType) (BalanceAllowance, error) {
+func (c *Client) BalanceAllowance(ctx context.Context, p BalanceAllowanceParams, sig polymarket.SignatureType) (BalanceAllowance, error) {
 	var out BalanceAllowance
-	err := c.getL2(ctx, epBalanceAllowance, p.query(sig), &out)
+	err := c.session.GetL2(ctx, epBalanceAllowance, p.query(sig), &out)
 	return out, err
 }
 
@@ -676,8 +679,8 @@ func (c *Client) BalanceAllowance(ctx context.Context, p BalanceAllowanceParams,
 //
 // Despite updating something, this is a GET: the exchange treats it as a
 // refresh of its own cache rather than a change to the account.
-func (c *Client) UpdateBalanceAllowance(ctx context.Context, p BalanceAllowanceParams, sig SignatureType) error {
-	return c.getL2(ctx, epUpdateBalance, p.query(sig), nil)
+func (c *Client) UpdateBalanceAllowance(ctx context.Context, p BalanceAllowanceParams, sig polymarket.SignatureType) error {
+	return c.session.GetL2(ctx, epUpdateBalance, p.query(sig), nil)
 }
 
 // A Notification is one message the exchange has for the account.
@@ -690,10 +693,10 @@ type Notification struct {
 }
 
 // Notifications lists the account's undismissed notifications. Level 2.
-func (c *Client) Notifications(ctx context.Context, sig SignatureType) ([]Notification, error) {
+func (c *Client) Notifications(ctx context.Context, sig polymarket.SignatureType) ([]Notification, error) {
 	var out []Notification
 	q := url.Values{"signature_type": {strconv.Itoa(int(sig))}}
-	err := c.getL2(ctx, epNotifications, q, &out)
+	err := c.session.GetL2(ctx, epNotifications, q, &out)
 	return out, err
 }
 
@@ -703,11 +706,11 @@ func (c *Client) DropNotifications(ctx context.Context, ids []string) error {
 	for _, id := range ids {
 		q.Add("ids", id)
 	}
-	return c.do(ctx, request{
-		method: http.MethodDelete,
-		path:   epNotifications,
-		query:  q,
-		auth:   authL2,
+	return c.session.Do(ctx, polymarket.Request{
+		Method: http.MethodDelete,
+		Path:   epNotifications,
+		Query:  q,
+		Auth:   polymarket.AuthL2,
 	})
 }
 
@@ -751,7 +754,7 @@ func (c *Client) FeeCurve(ctx context.Context, tokenID string) (FeeCurve, error)
 // rather than retry the same bytes.
 func (c *Client) APIVersion(ctx context.Context) (int, error) {
 	var out apiVersionResponse
-	if err := c.get(ctx, epVersion, nil, &out); err != nil {
+	if err := c.session.Get(ctx, epVersion, nil, &out); err != nil {
 		return 0, err
 	}
 	return out.Version, nil
@@ -767,11 +770,11 @@ type apiVersionResponse struct {
 func (c *Client) Heartbeat(ctx context.Context, heartbeatID string) error {
 	q := url.Values{}
 	setIf(q, "heartbeat_id", heartbeatID)
-	return c.do(ctx, request{
-		method: http.MethodPost,
-		path:   epHeartbeat,
-		query:  q,
-		auth:   authL2,
+	return c.session.Do(ctx, polymarket.Request{
+		Method: http.MethodPost,
+		Path:   epHeartbeat,
+		Query:  q,
+		Auth:   polymarket.AuthL2,
 	})
 }
 

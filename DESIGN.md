@@ -10,29 +10,47 @@ protocol facts, not copied source: this is a clean-room implementation.
 
 ## Shape
 
-One root package, `polymarket`, in Go standard-library shape. Callers write
-`polymarket.Client`, never `client.Client`. Machinery a caller never touches
-lives under `internal/`.
+Polymarket is four services, so this is four client packages over one shared
+foundation. A caller importing `gamma` never compiles a line of trading code.
 
 ```
-client.go      package doc, Client, transport, Error, auth levels
-protocol.go    hosts, chains, contracts, EIP-712 domains, endpoint paths
-signer.go      Signer, PrivateKey, address derivation, EIP-55
-auth.go        APICreds, level-1 EIP-712 headers, level-2 HMAC headers
-order.go       order types, BuildOrder, BuildMarketOrder, digest, signing
-market.go      market data reads
-trading.go     orders, cancels, queries, API-key lifecycle
-rewards.go     liquidity rewards
-builder.go     builder-code attribution
-data.go        the data API
-fees.go        the pre-trade fee model
-gamma.go       market and event metadata
-internal/eip712/   Keccak-256, typed-data encoding, domain separator
-internal/amount/   exact price/size to maker/taker conversion
-ws/            market and user streams
-testdata/      golden vectors and the script that regenerates them
-examples/      runnable commands, read-only unless stated
+polymarket/          the foundation, no endpoints
+  session.go     Session, Option, Request, AuthLevel, Do and its helpers
+  errors.go      Error, ErrNoSigner, ErrNoCredentials
+  signer.go      Signer, PrivateKey, address derivation, EIP-55
+  auth.go        APICreds, level-1 EIP-712 headers, level-2 HMAC headers
+  order.go       order types, BuildOrder, BuildMarketOrder, digest, signing
+  protocol.go    hosts, chains, contracts, EIP-712 domains, decimals
+  internal/eip712/   Keccak-256, typed-data encoding, domain separator
+  internal/amount/   exact price/size to maker/taker conversion
+
+clob/                the order book and everything that needs a signature
+  client.go      Client, New, NewWithSession, the shared options
+  endpoints.go   every CLOB path
+  market.go      market data reads
+  trading.go     orders, cancels, queries, the API-key lifecycle
+  rewards.go     liquidity rewards
+  builder.go     builder-code attribution
+  fees.go        the pre-trade fee estimate
+
+gamma/               market and event metadata, no authentication
+data/                positions, activity, holders, no authentication
+ws/                  market, user and live-data streams
+
+testdata/            golden vectors and the script that regenerates them
+examples/            runnable commands, read-only unless stated
 ```
+
+Each client package exposes the same constructor shape:
+
+```go
+c := clob.New(clob.WithSigner(key))     // its own session
+c := clob.NewWithSession(shared)        // one session, several clients
+```
+
+The options are the root package's, re-exported, so one import is enough for
+the common case and a `Session` is there when several clients should share a
+wallet and an `http.Client`.
 
 ## Hosts
 

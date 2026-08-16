@@ -77,7 +77,7 @@ func TestClobAuthDigestAndHeaders(t *testing.T) {
 		if hdr.Address != tc.Address {
 			t.Errorf("address = %s, want %s", hdr.Address, tc.Address)
 		}
-		m := hdr.header()
+		m := hdr.Header()
 		for _, k := range []string{"POLY_ADDRESS", "POLY_SIGNATURE", "POLY_TIMESTAMP", "POLY_NONCE"} {
 			if m[k] == "" {
 				t.Errorf("header %s is empty", k)
@@ -97,7 +97,7 @@ func TestBuildL2Headers(t *testing.T) {
 	if h.Signature != tc.Signature {
 		t.Errorf("signature = %s, want %s", h.Signature, tc.Signature)
 	}
-	m := h.header()
+	m := h.Header()
 	if m["POLY_API_KEY"] != "key-1" || m["POLY_PASSPHRASE"] != "pass-1" {
 		t.Errorf("credentials not carried into headers: %v", m)
 	}

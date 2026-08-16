@@ -193,6 +193,14 @@ func (c *Conn) readLoop() {
 			if c.ctx.Err() != nil {
 				return
 			}
+			// Release the dead connection's descriptor before dialing a
+			// replacement. github.com/coder/websocket does not close the
+			// underlying socket on a plain I/O read error -- only on a
+			// received close frame, or eventually via a finalizer -- and
+			// Polymarket's edge drops connections abruptly (no close
+			// frame) often enough that leaking one descriptor per
+			// reconnect would exhaust a long-lived process.
+			conn.CloseNow()
 			attempt++
 			newConn, rerr := c.reconnect(attempt)
 			if rerr != nil {

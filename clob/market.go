@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 ChloePike
 
-package polymarket
+package clob
 
 // This file implements the CLOB's read-only market-data endpoints: service
 // health, market and token metadata, order books, prices in their various
@@ -32,6 +32,7 @@ import (
 	"strconv"
 	"strings"
 
+	polymarket "github.com/ChloePike/go-polymarket"
 	"github.com/ChloePike/go-polymarket/internal/amount"
 )
 
@@ -54,7 +55,7 @@ type Pagination struct {
 // page) into CursorStart.
 func cursorOrStart(cursor string) string {
 	if cursor == "" {
-		return CursorStart
+		return polymarket.CursorStart
 	}
 	return cursor
 }
@@ -86,7 +87,7 @@ func Pages[T any](ctx context.Context, get func(ctx context.Context, cursor stri
 					return
 				}
 			}
-			if page.NextCursor == CursorEnd || page.NextCursor == "" || page.NextCursor == cursor {
+			if page.NextCursor == polymarket.CursorEnd || page.NextCursor == "" || page.NextCursor == cursor {
 				return
 			}
 			cursor = page.NextCursor
@@ -100,7 +101,7 @@ func Pages[T any](ctx context.Context, get func(ctx context.Context, cursor stri
 // and otherwise returns nil.
 func (c *Client) Ping(ctx context.Context) error {
 	var out string
-	return c.get(ctx, epOK, nil, &out)
+	return c.session.Get(ctx, epOK, nil, &out)
 }
 
 // Time returns the CLOB server's clock: no authentication, GET /time, which
@@ -109,7 +110,7 @@ func (c *Client) Ping(ctx context.Context) error {
 // Expiration — against this rather than its own clock.
 func (c *Client) Time(ctx context.Context) (int64, error) {
 	var sec int64
-	err := c.get(ctx, epTime, nil, &sec)
+	err := c.session.Get(ctx, epTime, nil, &sec)
 	return sec, err
 }
 
@@ -207,7 +208,7 @@ type simplifiedMarketsPage struct {
 func (c *Client) Markets(ctx context.Context, cursor string) ([]Market, Pagination, error) {
 	q := url.Values{"next_cursor": {cursorOrStart(cursor)}}
 	var page marketsPage
-	if err := c.get(ctx, epMarkets, q, &page); err != nil {
+	if err := c.session.Get(ctx, epMarkets, q, &page); err != nil {
 		return nil, Pagination{}, err
 	}
 	return page.Data, page.Pagination, nil
@@ -217,7 +218,7 @@ func (c *Client) Markets(ctx context.Context, cursor string) ([]Market, Paginati
 // /markets/{conditionID}.
 func (c *Client) Market(ctx context.Context, conditionID string) (Market, error) {
 	var out Market
-	err := c.get(ctx, epMarket+conditionID, nil, &out)
+	err := c.session.Get(ctx, epMarket+conditionID, nil, &out)
 	return out, err
 }
 
@@ -227,7 +228,7 @@ func (c *Client) Market(ctx context.Context, conditionID string) (Market, error)
 func (c *Client) SimplifiedMarkets(ctx context.Context, cursor string) ([]SimplifiedMarket, Pagination, error) {
 	q := url.Values{"next_cursor": {cursorOrStart(cursor)}}
 	var page simplifiedMarketsPage
-	if err := c.get(ctx, epSimplifiedMarkets, q, &page); err != nil {
+	if err := c.session.Get(ctx, epSimplifiedMarkets, q, &page); err != nil {
 		return nil, Pagination{}, err
 	}
 	return page.Data, page.Pagination, nil
@@ -239,7 +240,7 @@ func (c *Client) SimplifiedMarkets(ctx context.Context, cursor string) ([]Simpli
 func (c *Client) SamplingMarkets(ctx context.Context, cursor string) ([]Market, Pagination, error) {
 	q := url.Values{"next_cursor": {cursorOrStart(cursor)}}
 	var page marketsPage
-	if err := c.get(ctx, epSamplingMarkets, q, &page); err != nil {
+	if err := c.session.Get(ctx, epSamplingMarkets, q, &page); err != nil {
 		return nil, Pagination{}, err
 	}
 	return page.Data, page.Pagination, nil
@@ -251,7 +252,7 @@ func (c *Client) SamplingMarkets(ctx context.Context, cursor string) ([]Market, 
 func (c *Client) SamplingSimplifiedMarkets(ctx context.Context, cursor string) ([]SimplifiedMarket, Pagination, error) {
 	q := url.Values{"next_cursor": {cursorOrStart(cursor)}}
 	var page simplifiedMarketsPage
-	if err := c.get(ctx, epSamplingSimplifiedMarkets, q, &page); err != nil {
+	if err := c.session.Get(ctx, epSamplingSimplifiedMarkets, q, &page); err != nil {
 		return nil, Pagination{}, err
 	}
 	return page.Data, page.Pagination, nil
@@ -269,7 +270,7 @@ type MarketByToken struct {
 // authentication, GET /markets-by-token/{tokenID}.
 func (c *Client) MarketByToken(ctx context.Context, tokenID string) (MarketByToken, error) {
 	var out MarketByToken
-	err := c.get(ctx, epMarketByToken+tokenID, nil, &out)
+	err := c.session.Get(ctx, epMarketByToken+tokenID, nil, &out)
 	return out, err
 }
 
@@ -343,7 +344,7 @@ type ClobMarket struct {
 // that fees.go's fee model needs, in a shape distinct from Market's.
 func (c *Client) ClobMarket(ctx context.Context, conditionID string) (ClobMarket, error) {
 	var out ClobMarket
-	err := c.get(ctx, epClobMarket+conditionID, nil, &out)
+	err := c.session.Get(ctx, epClobMarket+conditionID, nil, &out)
 	return out, err
 }
 
@@ -371,7 +372,7 @@ type MarketLiveActivity struct {
 // MarketLiveActivity for how this differs from the SDK's declared type.
 func (c *Client) MarketTradesEvents(ctx context.Context, conditionID string) (MarketLiveActivity, error) {
 	var out MarketLiveActivity
-	err := c.get(ctx, epMarketTradesEvents+conditionID, nil, &out)
+	err := c.session.Get(ctx, epMarketTradesEvents+conditionID, nil, &out)
 	return out, err
 }
 
@@ -403,7 +404,7 @@ type OrderBook struct {
 // OrderBook fetches one token's order book: no authentication, GET /book.
 func (c *Client) OrderBook(ctx context.Context, tokenID string) (OrderBook, error) {
 	var out OrderBook
-	err := c.get(ctx, epBook, url.Values{"token_id": {tokenID}}, &out)
+	err := c.session.Get(ctx, epBook, url.Values{"token_id": {tokenID}}, &out)
 	return out, err
 }
 
@@ -412,8 +413,8 @@ func (c *Client) OrderBook(ctx context.Context, tokenID string) (OrderBook, erro
 // endpoints below: Books, Midpoints, Prices, Spreads and LastTradesPrices.
 // Side is ignored by every one of them except Prices.
 type BookParams struct {
-	TokenID string `json:"token_id"`
-	Side    Side   `json:"side,omitempty"`
+	TokenID string          `json:"token_id"`
+	Side    polymarket.Side `json:"side,omitempty"`
 }
 
 // Books fetches order books for several tokens in one round trip: no
@@ -424,7 +425,7 @@ type BookParams struct {
 // does not need.
 func (c *Client) Books(ctx context.Context, params []BookParams) ([]OrderBook, error) {
 	var out []OrderBook
-	err := c.do(ctx, request{method: http.MethodPost, path: epBooks, body: params, out: &out})
+	err := c.session.Do(ctx, polymarket.Request{Method: http.MethodPost, Path: epBooks, Body: params, Out: &out})
 	return out, err
 }
 
@@ -437,7 +438,7 @@ type midpointResponse struct {
 // and best ask: no authentication, GET /midpoint.
 func (c *Client) Midpoint(ctx context.Context, tokenID string) (string, error) {
 	var out midpointResponse
-	err := c.get(ctx, epMidpoint, url.Values{"token_id": {tokenID}}, &out)
+	err := c.session.Get(ctx, epMidpoint, url.Values{"token_id": {tokenID}}, &out)
 	return out.Mid, err
 }
 
@@ -445,7 +446,7 @@ func (c *Client) Midpoint(ctx context.Context, tokenID string) (string, error) {
 // keyed by token id: no authentication, POST /midpoints.
 func (c *Client) Midpoints(ctx context.Context, params []BookParams) (map[string]string, error) {
 	var out map[string]string
-	err := c.do(ctx, request{method: http.MethodPost, path: epMidpoints, body: params, out: &out})
+	err := c.session.Do(ctx, polymarket.Request{Method: http.MethodPost, Path: epMidpoints, Body: params, Out: &out})
 	return out, err
 }
 
@@ -457,9 +458,9 @@ type priceResponse struct {
 // Price reports the best price available on one side of a token's book: no
 // authentication, GET /price. side selects BUY (the best ask, what a buyer
 // would pay) or SELL (the best bid, what a seller would receive).
-func (c *Client) Price(ctx context.Context, tokenID string, side Side) (string, error) {
+func (c *Client) Price(ctx context.Context, tokenID string, side polymarket.Side) (string, error) {
 	var out priceResponse
-	err := c.get(ctx, epPrice, url.Values{"token_id": {tokenID}, "side": {string(side)}}, &out)
+	err := c.session.Get(ctx, epPrice, url.Values{"token_id": {tokenID}, "side": {string(side)}}, &out)
 	return out.Price, err
 }
 
@@ -467,9 +468,9 @@ func (c *Client) Price(ctx context.Context, tokenID string, side Side) (string, 
 // keyed first by token id and then by side: no authentication, POST
 // /prices. Unlike Books, Midpoints and Spreads, this plural endpoint reads
 // Side out of each BookParams.
-func (c *Client) Prices(ctx context.Context, params []BookParams) (map[string]map[Side]string, error) {
-	var out map[string]map[Side]string
-	err := c.do(ctx, request{method: http.MethodPost, path: epPrices, body: params, out: &out})
+func (c *Client) Prices(ctx context.Context, params []BookParams) (map[string]map[polymarket.Side]string, error) {
+	var out map[string]map[polymarket.Side]string
+	err := c.session.Do(ctx, polymarket.Request{Method: http.MethodPost, Path: epPrices, Body: params, Out: &out})
 	return out, err
 }
 
@@ -482,7 +483,7 @@ type spreadResponse struct {
 // authentication, GET /spread.
 func (c *Client) Spread(ctx context.Context, tokenID string) (string, error) {
 	var out spreadResponse
-	err := c.get(ctx, epSpread, url.Values{"token_id": {tokenID}}, &out)
+	err := c.session.Get(ctx, epSpread, url.Values{"token_id": {tokenID}}, &out)
 	return out.Spread, err
 }
 
@@ -490,7 +491,7 @@ func (c *Client) Spread(ctx context.Context, tokenID string) (string, error) {
 // token id: no authentication, POST /spreads.
 func (c *Client) Spreads(ctx context.Context, params []BookParams) (map[string]string, error) {
 	var out map[string]string
-	err := c.do(ctx, request{method: http.MethodPost, path: epSpreads, body: params, out: &out})
+	err := c.session.Do(ctx, polymarket.Request{Method: http.MethodPost, Path: epSpreads, Body: params, Out: &out})
 	return out, err
 }
 
@@ -499,16 +500,16 @@ func (c *Client) Spreads(ctx context.Context, params []BookParams) (map[string]s
 // single-token endpoint, which does not repeat it; LastTradesPrices fills
 // it in.
 type LastTradePrice struct {
-	TokenID string `json:"token_id,omitempty"`
-	Price   string `json:"price"`
-	Side    Side   `json:"side"`
+	TokenID string          `json:"token_id,omitempty"`
+	Price   string          `json:"price"`
+	Side    polymarket.Side `json:"side"`
 }
 
 // LastTradePrice reports the price and side of a token's most recent trade:
 // no authentication, GET /last-trade-price.
 func (c *Client) LastTradePrice(ctx context.Context, tokenID string) (LastTradePrice, error) {
 	var out LastTradePrice
-	err := c.get(ctx, epLastTradePrice, url.Values{"token_id": {tokenID}}, &out)
+	err := c.session.Get(ctx, epLastTradePrice, url.Values{"token_id": {tokenID}}, &out)
 	return out, err
 }
 
@@ -516,7 +517,7 @@ func (c *Client) LastTradePrice(ctx context.Context, tokenID string) (LastTradeP
 // trip: no authentication, POST /last-trades-prices.
 func (c *Client) LastTradesPrices(ctx context.Context, params []BookParams) ([]LastTradePrice, error) {
 	var out []LastTradePrice
-	err := c.do(ctx, request{method: http.MethodPost, path: epLastTradesPrices, body: params, out: &out})
+	err := c.session.Do(ctx, polymarket.Request{Method: http.MethodPost, Path: epLastTradesPrices, Body: params, Out: &out})
 	return out, err
 }
 
@@ -565,7 +566,7 @@ func (c *Client) PricesHistory(ctx context.Context, tokenID string, params Price
 		q.Set("fidelity", strconv.Itoa(params.Fidelity))
 	}
 	var out priceHistoryResponse
-	err := c.get(ctx, epPricesHistory, q, &out)
+	err := c.session.Get(ctx, epPricesHistory, q, &out)
 	return out.History, err
 }
 
@@ -607,7 +608,7 @@ type tickSizeResponse struct {
 // regardless of which shape the wire used.
 func (c *Client) TickSize(ctx context.Context, tokenID string) (string, error) {
 	var out tickSizeResponse
-	if err := c.get(ctx, epTickSize, url.Values{"token_id": {tokenID}}, &out); err != nil {
+	if err := c.session.Get(ctx, epTickSize, url.Values{"token_id": {tokenID}}, &out); err != nil {
 		return "", err
 	}
 	return canonicalTick(string(out.MinimumTickSize)), nil
@@ -633,7 +634,7 @@ type negRiskResponse struct {
 // authentication, GET /neg-risk.
 func (c *Client) NegRisk(ctx context.Context, tokenID string) (bool, error) {
 	var out negRiskResponse
-	err := c.get(ctx, epNegRisk, url.Values{"token_id": {tokenID}}, &out)
+	err := c.session.Get(ctx, epNegRisk, url.Values{"token_id": {tokenID}}, &out)
 	return out.NegRisk, err
 }
 
@@ -648,7 +649,7 @@ type feeRateResponse struct {
 // two are not derivable from one another; see ClobMarketFee.
 func (c *Client) FeeRate(ctx context.Context, tokenID string) (int, error) {
 	var out feeRateResponse
-	err := c.get(ctx, epFeeRate, url.Values{"token_id": {tokenID}}, &out)
+	err := c.session.Get(ctx, epFeeRate, url.Values{"token_id": {tokenID}}, &out)
 	return out.BaseFee, err
 }
 
@@ -663,7 +664,7 @@ func (c *Client) FeeRate(ctx context.Context, tokenID string) (int, error) {
 // order priced beyond the book would simply be rejected; any other
 // OrderType instead returns the worst price the walk reached, which is
 // marketable against the whole visible book.
-func (c *Client) MarketPrice(ctx context.Context, tokenID string, side Side, size string, orderType OrderType) (string, error) {
+func (c *Client) MarketPrice(ctx context.Context, tokenID string, side polymarket.Side, size string, orderType polymarket.OrderType) (string, error) {
 	book, err := c.OrderBook(ctx, tokenID)
 	if err != nil {
 		return "", err
@@ -677,13 +678,13 @@ func (c *Client) MarketPrice(ctx context.Context, tokenID string, side Side, siz
 // Bids and asks both come back worst price first (see OrderBook), so the
 // walk runs from the end of the slice toward the start: that is where the
 // most competitive price is.
-func marketPrice(book OrderBook, side Side, size string, orderType OrderType) (string, error) {
+func marketPrice(book OrderBook, side polymarket.Side, size string, orderType polymarket.OrderType) (string, error) {
 	amt, err := amount.ParseDecimal(size)
 	if err != nil {
 		return "", err
 	}
 	levels := book.Asks
-	if side == Sell {
+	if side == polymarket.Sell {
 		levels = book.Bids
 	}
 	if len(levels) == 0 {
@@ -697,7 +698,7 @@ func marketPrice(book OrderBook, side Side, size string, orderType OrderType) (s
 		if err != nil {
 			return "", err
 		}
-		if side == Buy {
+		if side == polymarket.Buy {
 			levelPrice, err := amount.ParseDecimal(lvl.Price)
 			if err != nil {
 				return "", err
@@ -710,7 +711,7 @@ func marketPrice(book OrderBook, side Side, size string, orderType OrderType) (s
 			return lvl.Price, nil
 		}
 	}
-	if orderType == FOK {
+	if orderType == polymarket.FOK {
 		return "", fmt.Errorf("polymarket: MarketPrice: no match: the book cannot fill %s at FOK", size)
 	}
 	return levels[0].Price, nil

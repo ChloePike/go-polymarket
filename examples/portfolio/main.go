@@ -17,17 +17,16 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"sort"
 	"time"
 
-	polymarket "github.com/ChloePike/go-polymarket"
+	"github.com/ChloePike/go-polymarket/data"
 )
 
 func main() {
-	log.SetFlags(0)
-	log.SetPrefix("portfolio: ")
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
 
 	user := flag.String("user", "", "wallet address; empty reads the leaderboard's top trader")
 	limit := flag.Int("limit", 15, "positions to show")
@@ -36,23 +35,25 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	var c polymarket.Client
+	c := data.New()
 
 	address := *user
 	if address == "" {
 		var err error
-		if address, err = topTrader(ctx, &c); err != nil {
-			log.Fatal(err)
+		if address, err = topTrader(ctx, c); err != nil {
+			slog.Error("reading the leaderboard", "err", err)
+			os.Exit(1)
 		}
-		fmt.Fprintf(os.Stderr, "no -user given; reading %s\n", address)
+		slog.Info("no -user given; reading the leaderboard's top trader", "address", address)
 	}
 
-	positions, err := c.Positions(ctx, polymarket.PositionsParams{
+	positions, err := c.Positions(ctx, data.PositionsParams{
 		User:  address,
 		Limit: *limit,
 	})
 	if err != nil {
-		log.Fatal(err)
+		slog.Error("fetching positions", "user", address, "err", err)
+		os.Exit(1)
 	}
 	if len(positions) == 0 {
 		fmt.Printf("%s holds nothing\n", address)
@@ -81,8 +82,8 @@ func main() {
 }
 
 // topTrader picks an address with real positions so the command runs bare.
-func topTrader(ctx context.Context, c *polymarket.Client) (string, error) {
-	board, err := c.Leaderboard(ctx, polymarket.LeaderboardParams{Limit: 1})
+func topTrader(ctx context.Context, c *data.Client) (string, error) {
+	board, err := c.Leaderboard(ctx, data.LeaderboardParams{Limit: 1})
 	if err != nil {
 		return "", err
 	}

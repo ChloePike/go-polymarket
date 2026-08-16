@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 ChloePike
 
-package polymarket
+package clob
 
 // This file uses float64, the one exception CLAUDE.md's no-float64 rule
 // allows. The platform fee rate raises (price * (1 - price)) to a fractional

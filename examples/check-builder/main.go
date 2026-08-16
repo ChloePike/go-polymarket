@@ -20,6 +20,7 @@ import (
 	"os"
 
 	polymarket "github.com/ChloePike/go-polymarket"
+	"github.com/ChloePike/go-polymarket/clob"
 )
 
 func main() {
@@ -29,7 +30,7 @@ func main() {
 	}
 	code := os.Args[1]
 	ctx := context.Background()
-	var c polymarket.Client
+	c := clob.New()
 
 	fees, err := c.BuilderFees(ctx, code)
 	if err != nil {
@@ -41,7 +42,7 @@ func main() {
 	fmt.Printf("maker fee %d bps (%s)\n", fees.MakerFeeRateBps, formatBps(fees.MakerFeeRateBps))
 	fmt.Printf("taker fee %d bps (%s)\n", fees.TakerFeeRateBps, formatBps(fees.TakerFeeRateBps))
 
-	count, err := countBuilderTrades(ctx, &c, code)
+	count, err := countBuilderTrades(ctx, c, code)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "builder trades: %v\n", err)
 		os.Exit(1)
@@ -54,11 +55,11 @@ func main() {
 // trusted as a running total: nothing observed so far confirms whether it
 // means "this page" or "overall", so counting by hand is the only way to be
 // sure. A cursor that fails to advance stops the loop rather than spinning.
-func countBuilderTrades(ctx context.Context, c *polymarket.Client, code string) (int, error) {
+func countBuilderTrades(ctx context.Context, c *clob.Client, code string) (int, error) {
 	var total int
 	cursor := ""
 	for {
-		trades, page, err := c.BuilderTrades(ctx, code, polymarket.BuilderTradeParams{NextCursor: cursor})
+		trades, page, err := c.BuilderTrades(ctx, code, clob.BuilderTradeParams{NextCursor: cursor})
 		if err != nil {
 			return total, err
 		}

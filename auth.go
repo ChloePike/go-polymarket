@@ -71,7 +71,8 @@ type L1Headers struct {
 	Nonce     string
 }
 
-func (h L1Headers) header() map[string]string {
+// Header renders the headers under their canonical POLY_ names.
+func (h L1Headers) Header() map[string]string {
 	return map[string]string{
 		"POLY_ADDRESS":   h.Address,
 		"POLY_SIGNATURE": h.Signature,
@@ -110,7 +111,8 @@ type L2Headers struct {
 	Timestamp  string // unix seconds
 }
 
-func (h L2Headers) header() map[string]string {
+// Header renders the headers under their canonical POLY_ names.
+func (h L2Headers) Header() map[string]string {
 	return map[string]string{
 		"POLY_ADDRESS":    h.Address,
 		"POLY_SIGNATURE":  h.Signature,

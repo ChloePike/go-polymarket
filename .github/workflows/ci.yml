@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 ChloePike
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          check-latest: true
+
+      # The same four gates the working spec requires before any commit.
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "these files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: build
+        run: go build ./...
+
+      - name: vet
+        run: go vet ./...
+
+      # No test touches the network: the golden vectors and httptest servers
+      # cover everything, so this is deterministic on a runner.
+      - name: test
+        run: go test -race ./...
+
+  # A guard for the rule that costs the most when it slips: every struct type
+  # is declared and named, so a response shape is never written inline where
+  # nobody else can decode it.
+  no-anonymous-structs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: reject anonymous structs
+        run: |
+          if grep -rnE '(var|:=|\[\]|map\[[^]]*\]|\)\s*)struct \{' --include='*.go' .; then
+            echo
+            echo "anonymous struct found: declare it at package level with a doc comment"
+            exit 1
+          fi

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 ChloePike
 
-package polymarket
+package data
 
 import (
 	"context"
@@ -9,7 +9,23 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"testing"
+
+	polymarket "github.com/ChloePike/go-polymarket"
 )
+
+// noAuthHeaders lists the level-2 headers a request must NOT carry. Every
+// data-API endpoint is public: no signature, no key, no wallet address.
+var noAuthHeaders = []string{"POLY_ADDRESS", "POLY_SIGNATURE", "POLY_API_KEY", "POLY_PASSPHRASE"}
+
+// checkNoAuth fails the test if the request carries any level-2 header.
+func checkNoAuth(t *testing.T, r *http.Request) {
+	t.Helper()
+	for _, h := range noAuthHeaders {
+		if v := r.Header.Get(h); v != "" {
+			t.Errorf("request carries auth header %s = %q, want none", h, v)
+		}
+	}
+}
 
 // checkQuery fails the test if got does not carry exactly the keys and
 // values in want, no more and no fewer. An unexpected extra key usually means
@@ -35,15 +51,12 @@ func checkQuery(t *testing.T, got, want url.Values) {
 	}
 }
 
-// dataServer starts an httptest server and returns a Client pointed at it
-// through Data, not Host: dataGet must read c.dataHost(), and a Client whose
-// Host is left at an address nothing listens on proves the CLOB host was
-// never consulted.
+// dataServer starts an httptest server and returns a Client pointed at it.
 func dataServer(t *testing.T, handler http.HandlerFunc) *Client {
 	t.Helper()
 	srv := httptest.NewServer(handler)
 	t.Cleanup(srv.Close)
-	return &Client{Host: "http://127.0.0.1:1", Data: srv.URL}
+	return New(polymarket.WithHost(srv.URL))
 }
 
 func TestDataHealth(t *testing.T) {
@@ -278,7 +291,7 @@ func TestFillsQuery(t *testing.T) {
 				Limit: 500, Offset: 20, IncludeMakerFills: true,
 				FilterType: "CASH", FilterAmount: "100",
 				Market: []string{"0xm1"}, Event: []int64{795581},
-				User: "0xabc", Side: Buy,
+				User: "0xabc", Side: polymarket.Buy,
 			},
 			want: url.Values{
 				"limit": {"500"}, "offset": {"20"}, "takerOnly": {"false"},
@@ -339,7 +352,7 @@ func TestFillsDecode(t *testing.T) {
 		t.Fatalf("len(got) = %d, want 1", len(got))
 	}
 	f := got[0]
-	if f.Side != Buy {
+	if f.Side != polymarket.Buy {
 		t.Errorf("Side = %q, want BUY", f.Side)
 	}
 	// 999 is the platform's own sentinel for "not applicable" on some rows
@@ -378,7 +391,7 @@ func TestActivityQuery(t *testing.T) {
 				User: "0xabc", Limit: 3, Offset: 1,
 				Market: []string{"0xm1"}, Event: []int64{795581},
 				Start: 1700000000, End: 1800000000,
-				SortBy: "CASH", SortDirection: "ASC", Side: Sell,
+				SortBy: "CASH", SortDirection: "ASC", Side: polymarket.Sell,
 			},
 			want: url.Values{
 				"user": {"0xabc"}, "limit": {"3"}, "offset": {"1"},

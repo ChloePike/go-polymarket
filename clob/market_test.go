@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 ChloePike
 
-package polymarket
+package clob
 
 import (
 	"context"
@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"testing"
 
+	polymarket "github.com/ChloePike/go-polymarket"
 	"github.com/ChloePike/go-polymarket/internal/amount"
 )
 
@@ -64,7 +65,7 @@ func decodeBookParams(t *testing.T, body []byte) []BookParams {
 func TestPing(t *testing.T) {
 	var rec recordedRequest
 	srv := recordingServer(t, &rec, http.StatusOK, `"OK"`)
-	c := &Client{Host: srv.URL}
+	c := New(WithHost(srv.URL))
 
 	if err := c.Ping(context.Background()); err != nil {
 		t.Fatal(err)
@@ -84,15 +85,15 @@ func TestPingError(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":"down"}`))
 	}))
 	defer srv.Close()
-	c := &Client{Host: srv.URL}
+	c := New(WithHost(srv.URL))
 
 	err := c.Ping(context.Background())
 	if err == nil {
 		t.Fatal("got nil error, want one")
 	}
-	var apiErr *Error
+	var apiErr *polymarket.Error
 	if !errors.As(err, &apiErr) {
-		t.Fatalf("error type = %T, want *Error", err)
+		t.Fatalf("error type = %T, want *polymarket.Error", err)
 	}
 	if apiErr.StatusCode != http.StatusServiceUnavailable {
 		t.Errorf("StatusCode = %d, want 503", apiErr.StatusCode)
@@ -102,7 +103,7 @@ func TestPingError(t *testing.T) {
 func TestTime(t *testing.T) {
 	var rec recordedRequest
 	srv := recordingServer(t, &rec, http.StatusOK, `1786863613`)
-	c := &Client{Host: srv.URL}
+	c := New(WithHost(srv.URL))
 
 	got, err := c.Time(context.Background())
 	if err != nil {
@@ -192,7 +193,7 @@ func TestMarket(t *testing.T) {
 	const conditionID = "0xa467b14d51f01b957109d9cbb1d6c124fab2a089d52ed8f471d23c2812e743b7"
 	var rec recordedRequest
 	srv := recordingServer(t, &rec, http.StatusOK, marketBody)
-	c := &Client{Host: srv.URL}
+	c := New(WithHost(srv.URL))
 
 	m, err := c.Market(context.Background(), conditionID)
 	if err != nil {
@@ -215,7 +216,7 @@ type cursorCase struct {
 }
 
 var cursorCases = []cursorCase{
-	{name: "empty cursor defaults to CursorStart", cursor: "", wantCursor: CursorStart},
+	{name: "empty cursor defaults to CursorStart", cursor: "", wantCursor: polymarket.CursorStart},
 	{name: "caller's cursor passes through", cursor: "abc123", wantCursor: "abc123"},
 }
 
@@ -225,7 +226,7 @@ func TestMarkets(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var rec recordedRequest
 			srv := recordingServer(t, &rec, http.StatusOK, page)
-			c := &Client{Host: srv.URL}
+			c := New(WithHost(srv.URL))
 
 			markets, p, err := c.Markets(context.Background(), tc.cursor)
 			if err != nil {
@@ -242,8 +243,8 @@ func TestMarkets(t *testing.T) {
 				t.Fatalf("got %d markets, want 1", len(markets))
 			}
 			checkMarketBody(t, markets[0])
-			if p.NextCursor != CursorEnd {
-				t.Errorf("NextCursor = %s, want %s", p.NextCursor, CursorEnd)
+			if p.NextCursor != polymarket.CursorEnd {
+				t.Errorf("NextCursor = %s, want %s", p.NextCursor, polymarket.CursorEnd)
 			}
 			if p.Limit != 1000 || p.Count != 1 {
 				t.Errorf("Pagination = %+v", p)
@@ -254,7 +255,7 @@ func TestMarkets(t *testing.T) {
 
 func TestMarketsError(t *testing.T) {
 	srv := recordingServer(t, new(recordedRequest), http.StatusInternalServerError, `{"error":"boom"}`)
-	c := &Client{Host: srv.URL}
+	c := New(WithHost(srv.URL))
 
 	if _, _, err := c.Markets(context.Background(), ""); err == nil {
 		t.Fatal("got nil error, want one")
@@ -323,7 +324,7 @@ func TestPaginatedMarketEndpoints(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var rec recordedRequest
 			srv := recordingServer(t, &rec, http.StatusOK, tc.body)
-			c := &Client{Host: srv.URL}
+			c := New(WithHost(srv.URL))
 
 			n, err := tc.call(c, context.Background(), "")
 			if err != nil {
@@ -332,8 +333,8 @@ func TestPaginatedMarketEndpoints(t *testing.T) {
 			if rec.Path != tc.wantPath {
 				t.Errorf("path = %s, want %s", rec.Path, tc.wantPath)
 			}
-			if got := rec.Query.Get("next_cursor"); got != CursorStart {
-				t.Errorf("next_cursor = %q, want %q", got, CursorStart)
+			if got := rec.Query.Get("next_cursor"); got != polymarket.CursorStart {
+				t.Errorf("next_cursor = %q, want %q", got, polymarket.CursorStart)
 			}
 			if n != 1 {
 				t.Errorf("got %d rows, want 1", n)
@@ -346,7 +347,7 @@ func TestSimplifiedMarketDecode(t *testing.T) {
 	page := `{"data":[` + simplifiedMarketBody + `],"next_cursor":"LTE=","limit":500,"count":1}`
 	var rec recordedRequest
 	srv := recordingServer(t, &rec, http.StatusOK, page)
-	c := &Client{Host: srv.URL}
+	c := New(WithHost(srv.URL))
 
 	rows, _, err := c.SimplifiedMarkets(context.Background(), "")
 	if err != nil {
@@ -369,7 +370,7 @@ func TestMarketByToken(t *testing.T) {
 	body := `{"condition_id":"0xa467b14d51f01b957109d9cbb1d6c124fab2a089d52ed8f471d23c2812e743b7","primary_token_id":"25659310674993675562345759665114759892400026242514633218387667107987341231962","secondary_token_id":"32338220190071351435772801779725302244575775216413325951443816017994629993401"}`
 	var rec recordedRequest
 	srv := recordingServer(t, &rec, http.StatusOK, body)
-	c := &Client{Host: srv.URL}
+	c := New(WithHost(srv.URL))
 
 	got, err := c.MarketByToken(context.Background(), tokenID)
 	if err != nil {
@@ -395,7 +396,7 @@ func TestClobMarket(t *testing.T) {
 	const conditionID = "0xa467b14d51f01b957109d9cbb1d6c124fab2a089d52ed8f471d23c2812e743b7"
 	var rec recordedRequest
 	srv := recordingServer(t, &rec, http.StatusOK, clobMarketBody)
-	c := &Client{Host: srv.URL}
+	c := New(WithHost(srv.URL))
 
 	got, err := c.ClobMarket(context.Background(), conditionID)
 	if err != nil {
@@ -439,7 +440,7 @@ func TestMarketTradesEvents(t *testing.T) {
 	const conditionID = "0xa467b14d51f01b957109d9cbb1d6c124fab2a089d52ed8f471d23c2812e743b7"
 	var rec recordedRequest
 	srv := recordingServer(t, &rec, http.StatusOK, marketLiveActivityBody)
-	c := &Client{Host: srv.URL}
+	c := New(WithHost(srv.URL))
 
 	got, err := c.MarketTradesEvents(context.Background(), conditionID)
 	if err != nil {
@@ -479,7 +480,7 @@ func TestOrderBook(t *testing.T) {
 	const tokenID = "32338220190071351435772801779725302244575775216413325951443816017994629993401"
 	var rec recordedRequest
 	srv := recordingServer(t, &rec, http.StatusOK, orderBookBody)
-	c := &Client{Host: srv.URL}
+	c := New(WithHost(srv.URL))
 
 	got, err := c.OrderBook(context.Background(), tokenID)
 	if err != nil {
@@ -508,7 +509,7 @@ func TestBooks(t *testing.T) {
 	respBody := `[` + orderBookBody + `]`
 	var rec bodyRequest
 	srv := bodyRecordingServer(t, &rec, http.StatusOK, respBody)
-	c := &Client{Host: srv.URL}
+	c := New(WithHost(srv.URL))
 
 	got, err := c.Books(context.Background(), params)
 	if err != nil {
@@ -538,7 +539,7 @@ func TestMidpointAndMidpoints(t *testing.T) {
 	t.Run("Midpoint", func(t *testing.T) {
 		var rec recordedRequest
 		srv := recordingServer(t, &rec, http.StatusOK, `{"mid":"0.0455"}`)
-		c := &Client{Host: srv.URL}
+		c := New(WithHost(srv.URL))
 
 		got, err := c.Midpoint(context.Background(), tokenID)
 		if err != nil {
@@ -556,7 +557,7 @@ func TestMidpointAndMidpoints(t *testing.T) {
 		body := `{"111":"0.0455","222":"0.9545"}`
 		var rec bodyRequest
 		srv := bodyRecordingServer(t, &rec, http.StatusOK, body)
-		c := &Client{Host: srv.URL}
+		c := New(WithHost(srv.URL))
 
 		got, err := c.Midpoints(context.Background(), params)
 		if err != nil {
@@ -577,9 +578,9 @@ func TestPriceAndPrices(t *testing.T) {
 	t.Run("Price", func(t *testing.T) {
 		var rec recordedRequest
 		srv := recordingServer(t, &rec, http.StatusOK, `{"price":"0.045"}`)
-		c := &Client{Host: srv.URL}
+		c := New(WithHost(srv.URL))
 
-		got, err := c.Price(context.Background(), tokenID, Buy)
+		got, err := c.Price(context.Background(), tokenID, polymarket.Buy)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -591,11 +592,11 @@ func TestPriceAndPrices(t *testing.T) {
 		}
 	})
 	t.Run("Prices", func(t *testing.T) {
-		params := []BookParams{{TokenID: "111", Side: Buy}, {TokenID: "111", Side: Sell}}
+		params := []BookParams{{TokenID: "111", Side: polymarket.Buy}, {TokenID: "111", Side: polymarket.Sell}}
 		body := `{"111":{"BUY":"0.045","SELL":"0.046"}}`
 		var rec bodyRequest
 		srv := bodyRecordingServer(t, &rec, http.StatusOK, body)
-		c := &Client{Host: srv.URL}
+		c := New(WithHost(srv.URL))
 
 		got, err := c.Prices(context.Background(), params)
 		if err != nil {
@@ -608,7 +609,7 @@ func TestPriceAndPrices(t *testing.T) {
 		if !reflect.DeepEqual(gotParams, params) {
 			t.Errorf("request body = %+v, want %+v", gotParams, params)
 		}
-		want := map[string]map[Side]string{"111": {Buy: "0.045", Sell: "0.046"}}
+		want := map[string]map[polymarket.Side]string{"111": {polymarket.Buy: "0.045", polymarket.Sell: "0.046"}}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("Prices() = %+v, want %+v", got, want)
 		}
@@ -620,7 +621,7 @@ func TestSpreadAndSpreads(t *testing.T) {
 	t.Run("Spread", func(t *testing.T) {
 		var rec recordedRequest
 		srv := recordingServer(t, &rec, http.StatusOK, `{"spread":"0.001"}`)
-		c := &Client{Host: srv.URL}
+		c := New(WithHost(srv.URL))
 
 		got, err := c.Spread(context.Background(), tokenID)
 		if err != nil {
@@ -638,7 +639,7 @@ func TestSpreadAndSpreads(t *testing.T) {
 		body := `{"111":"0.001","222":"0.001"}`
 		var rec bodyRequest
 		srv := bodyRecordingServer(t, &rec, http.StatusOK, body)
-		c := &Client{Host: srv.URL}
+		c := New(WithHost(srv.URL))
 
 		got, err := c.Spreads(context.Background(), params)
 		if err != nil {
@@ -659,13 +660,13 @@ func TestLastTradePriceAndLastTradesPrices(t *testing.T) {
 	t.Run("LastTradePrice", func(t *testing.T) {
 		var rec recordedRequest
 		srv := recordingServer(t, &rec, http.StatusOK, `{"price":"0.045","side":"BUY"}`)
-		c := &Client{Host: srv.URL}
+		c := New(WithHost(srv.URL))
 
 		got, err := c.LastTradePrice(context.Background(), tokenID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := LastTradePrice{Price: "0.045", Side: Buy}
+		want := LastTradePrice{Price: "0.045", Side: polymarket.Buy}
 		if got != want {
 			t.Errorf("LastTradePrice() = %+v, want %+v", got, want)
 		}
@@ -678,7 +679,7 @@ func TestLastTradePriceAndLastTradesPrices(t *testing.T) {
 		body := `[{"price":"0.954","side":"SELL","token_id":"222"},{"price":"0.045","side":"BUY","token_id":"111"}]`
 		var rec bodyRequest
 		srv := bodyRecordingServer(t, &rec, http.StatusOK, body)
-		c := &Client{Host: srv.URL}
+		c := New(WithHost(srv.URL))
 
 		got, err := c.LastTradesPrices(context.Background(), params)
 		if err != nil {
@@ -688,8 +689,8 @@ func TestLastTradePriceAndLastTradesPrices(t *testing.T) {
 			t.Errorf("path = %s, want %s", rec.Path, epLastTradesPrices)
 		}
 		want := []LastTradePrice{
-			{TokenID: "222", Price: "0.954", Side: Sell},
-			{TokenID: "111", Price: "0.045", Side: Buy},
+			{TokenID: "222", Price: "0.954", Side: polymarket.Sell},
+			{TokenID: "111", Price: "0.045", Side: polymarket.Buy},
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("LastTradesPrices() = %+v, want %+v", got, want)
@@ -735,7 +736,7 @@ func TestPricesHistory(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var rec recordedRequest
 			srv := recordingServer(t, &rec, http.StatusOK, respBody)
-			c := &Client{Host: srv.URL}
+			c := New(WithHost(srv.URL))
 
 			got, err := c.PricesHistory(context.Background(), "111", tc.params)
 			if tc.wantErr {
@@ -780,7 +781,7 @@ func TestTickSize(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var rec recordedRequest
 			srv := recordingServer(t, &rec, http.StatusOK, tc.body)
-			c := &Client{Host: srv.URL}
+			c := New(WithHost(srv.URL))
 
 			got, err := c.TickSize(context.Background(), "111")
 			if err != nil {
@@ -863,7 +864,7 @@ func TestLooseNumberUnmarshalJSON(t *testing.T) {
 func TestNegRisk(t *testing.T) {
 	var rec recordedRequest
 	srv := recordingServer(t, &rec, http.StatusOK, `{"neg_risk":true}`)
-	c := &Client{Host: srv.URL}
+	c := New(WithHost(srv.URL))
 
 	got, err := c.NegRisk(context.Background(), "111")
 	if err != nil {
@@ -880,7 +881,7 @@ func TestNegRisk(t *testing.T) {
 func TestFeeRate(t *testing.T) {
 	var rec recordedRequest
 	srv := recordingServer(t, &rec, http.StatusOK, `{"base_fee":1000}`)
-	c := &Client{Host: srv.URL}
+	c := New(WithHost(srv.URL))
 
 	got, err := c.FeeRate(context.Background(), "111")
 	if err != nil {
@@ -915,9 +916,9 @@ var testBook = OrderBook{
 type marketPriceCase struct {
 	name      string
 	book      OrderBook
-	side      Side
+	side      polymarket.Side
 	size      string
-	orderType OrderType
+	orderType polymarket.OrderType
 	want      string
 	wantErr   bool
 }
@@ -925,47 +926,47 @@ type marketPriceCase struct {
 var marketPriceCases = []marketPriceCase{
 	{
 		name: "buy stops at the best ask on an exact threshold",
-		book: testBook, side: Buy, size: "2.3", orderType: FOK,
+		book: testBook, side: polymarket.Buy, size: "2.3", orderType: polymarket.FOK,
 		want: "0.46", // top of book: 5 shares * 0.46 = 2.3
 	},
 	{
 		name: "buy walks past the best ask when it is not enough",
-		book: testBook, side: Buy, size: "5", orderType: FOK,
+		book: testBook, side: polymarket.Buy, size: "5", orderType: polymarket.FOK,
 		want: "0.48", // 0.46 level contributes 2.3 < 5; add 20*0.48=9.6, total 11.9 >= 5
 	},
 	{
 		name: "buy FOK with insufficient book liquidity is an error",
-		book: testBook, side: Buy, size: "100", orderType: FOK,
+		book: testBook, side: polymarket.Buy, size: "100", orderType: polymarket.FOK,
 		wantErr: true,
 	},
 	{
 		name: "buy FAK with insufficient liquidity falls back to the worst ask",
-		book: testBook, side: Buy, size: "100", orderType: FAK,
+		book: testBook, side: polymarket.Buy, size: "100", orderType: polymarket.FAK,
 		want: "0.50", // positions[0], the worst (first) element of Asks
 	},
 	{
 		name: "sell stops at the best bid on an exact threshold",
-		book: testBook, side: Sell, size: "6", orderType: FOK,
+		book: testBook, side: polymarket.Sell, size: "6", orderType: polymarket.FOK,
 		want: "0.44", // top of book: 6 shares
 	},
 	{
 		name: "sell walks past the best bid when it is not enough",
-		book: testBook, side: Sell, size: "10", orderType: FOK,
+		book: testBook, side: polymarket.Sell, size: "10", orderType: polymarket.FOK,
 		want: "0.42", // 0.44 level contributes 6 < 10; add 12, total 18 >= 10
 	},
 	{
 		name: "sell FOK with insufficient book liquidity is an error",
-		book: testBook, side: Sell, size: "1000", orderType: FOK,
+		book: testBook, side: polymarket.Sell, size: "1000", orderType: polymarket.FOK,
 		wantErr: true,
 	},
 	{
 		name: "sell GTC with insufficient liquidity falls back to the worst bid",
-		book: testBook, side: Sell, size: "1000", orderType: GTC,
+		book: testBook, side: polymarket.Sell, size: "1000", orderType: polymarket.GTC,
 		want: "0.40", // positions[0], the worst (first) element of Bids
 	},
 	{
 		name: "empty side is an error regardless of order type",
-		book: OrderBook{}, side: Buy, size: "1", orderType: GTC,
+		book: OrderBook{}, side: polymarket.Buy, size: "1", orderType: polymarket.GTC,
 		wantErr: true,
 	},
 }
@@ -998,9 +999,9 @@ func TestClientMarketPrice(t *testing.T) {
 	}
 	var rec recordedRequest
 	srv := recordingServer(t, &rec, http.StatusOK, string(body))
-	c := &Client{Host: srv.URL}
+	c := New(WithHost(srv.URL))
 
-	got, err := c.MarketPrice(context.Background(), tokenID, Buy, "2.3", FOK)
+	got, err := c.MarketPrice(context.Background(), tokenID, polymarket.Buy, "2.3", polymarket.FOK)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1025,7 +1026,7 @@ func (p *intPage) get(_ context.Context, cursor string) ([]int, Pagination, erro
 	case "":
 		return []int{1, 2}, Pagination{NextCursor: "cur2"}, nil
 	case "cur2":
-		return []int{3}, Pagination{NextCursor: CursorEnd}, nil
+		return []int{3}, Pagination{NextCursor: polymarket.CursorEnd}, nil
 	default:
 		return nil, Pagination{}, fmt.Errorf("intPage: unexpected cursor %q", cursor)
 	}
