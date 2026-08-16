@@ -126,9 +126,8 @@ var (
 		{Prefix: "/closed-positions", Limit: RateLimit{150, 10 * time.Second}},
 	}
 
-	// BridgeRateLimits are the limits on the bridge host. This client does not
-	// wrap the bridge yet; the figure is here so that a caller reaching it
-	// through Session.Do is paced correctly.
+	// BridgeRateLimits are the limits on the bridge host, which the bridge
+	// package uses.
 	BridgeRateLimits = []Rule{
 		{Prefix: "/", Limit: RateLimit{50, 10 * time.Second}},
 	}
@@ -142,10 +141,11 @@ var (
 
 // Hosts this client knows limits for.
 const (
-	// BridgeHost is Polymarket's bridge. Not wrapped by this client.
+	// BridgeHost is Polymarket's bridge: deposits and withdrawals across
+	// chains. See the bridge package.
 	BridgeHost = "https://bridge.polymarket.com"
-	// RelayerHost is Polymarket's transaction relayer. Not wrapped by this
-	// client.
+	// RelayerHost is Polymarket's transaction relayer, which pays the gas a
+	// smart wallet cannot. See the relayer package.
 	RelayerHost = "https://relayer-v2.polymarket.com"
 )
 

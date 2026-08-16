@@ -180,6 +180,14 @@ type Request struct {
 	// Out receives the decoded response. Leave it nil to discard the body.
 	Out any
 
+	// Headers are extra request headers, for an endpoint that takes one that
+	// is not authentication — a builder code on a bridge deposit, say.
+	//
+	// They are applied before the authentication headers, so a Headers entry
+	// can never displace a signature. Like the query string they are outside
+	// the level-2 signature.
+	Headers map[string]string
+
 	// Cost is what this request spends from the per-signer trading
 	// allowance. Zero means one, so an ordinary request needs no thought;
 	// a batch costs one per entry, and a cancellation that removes several
@@ -226,6 +234,11 @@ func (s *Session) Do(ctx context.Context, r Request) error {
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	for k, v := range r.Headers {
+		req.Header.Set(k, v)
+	}
+	// Authentication last: a caller's header may add to a request but must
+	// never replace the thing that proves who is sending it.
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
