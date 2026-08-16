@@ -224,15 +224,38 @@ func assemble(tokenID string, side Side, raw amount.Raw, signerAddress string, o
 		return Order{}, fmt.Errorf("polymarket: token id %q is not a decimal integer", tokenID)
 	}
 
+	// Validate the pass-through fields here rather than letting them fail at
+	// digest time. A builder code that is not a bytes32 is a mistyped or
+	// truncated code, and the caller should learn that while holding the
+	// string they typed — not later, from an Order that looked well formed.
+	builder := orDefault(builderCode, ZeroBytes32)
+	if _, err := eip712.Bytes32(builder); err != nil {
+		return Order{}, fmt.Errorf("polymarket: builder code: %w", err)
+	}
+	meta := orDefault(metadata, ZeroBytes32)
+	if _, err := eip712.Bytes32(meta); err != nil {
+		return Order{}, fmt.Errorf("polymarket: order metadata: %w", err)
+	}
+	takerAddress := orDefault(taker, ZeroAddress)
+	if _, err := eip712.Address(takerAddress); err != nil {
+		return Order{}, fmt.Errorf("polymarket: order taker: %w", err)
+	}
+
 	maker := opts.Funder
 	if maker == "" {
 		maker = signerAddress
+	}
+	if _, err := eip712.Address(maker); err != nil {
+		return Order{}, fmt.Errorf("polymarket: order maker: %w", err)
 	}
 	// An EIP-1271 wallet verifies against the funder, so the signed signer
 	// field names the wallet rather than the key that produced the bytes.
 	signer := signerAddress
 	if opts.SignatureType == SigEIP1271 {
 		signer = maker
+	}
+	if _, err := eip712.Address(signer); err != nil {
+		return Order{}, fmt.Errorf("polymarket: order signer: %w", err)
 	}
 
 	salt := opts.Salt
@@ -251,7 +274,7 @@ func assemble(tokenID string, side Side, raw amount.Raw, signerAddress string, o
 		Salt:          strconv.FormatInt(salt, 10),
 		Maker:         maker,
 		Signer:        signer,
-		Taker:         orDefault(taker, ZeroAddress),
+		Taker:         takerAddress,
 		TokenID:       tokenID,
 		MakerAmount:   amount.Fixed(raw.Maker),
 		TakerAmount:   amount.Fixed(raw.Taker),
@@ -259,8 +282,8 @@ func assemble(tokenID string, side Side, raw amount.Raw, signerAddress string, o
 		SignatureType: opts.SignatureType,
 		Timestamp:     strconv.FormatInt(ts, 10),
 		Expiration:    strconv.FormatInt(expiration, 10),
-		Metadata:      orDefault(metadata, ZeroBytes32),
-		Builder:       orDefault(builderCode, ZeroBytes32),
+		Metadata:      meta,
+		Builder:       builder,
 	}, nil
 }
 

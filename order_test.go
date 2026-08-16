@@ -198,6 +198,25 @@ func TestBuildOrderRejects(t *testing.T) {
 		{"non-numeric token id",
 			UserOrder{TokenID: "0xdeadbeef", Price: "0.5", Size: "1", Side: Buy},
 			OrderOptions{TickSize: "0.01"}},
+		// The pass-through fields are checked here rather than at digest
+		// time, so a mistyped builder code is reported while the caller
+		// still has the string they typed.
+		{"short builder code",
+			UserOrder{TokenID: token, Price: "0.5", Size: "1", Side: Buy, BuilderCode: "0xdeadbeef"},
+			OrderOptions{TickSize: "0.01"}},
+		{"builder code is not hex",
+			UserOrder{TokenID: token, Price: "0.5", Size: "1", Side: Buy,
+				BuilderCode: "0xzzadfa1337e1d4049b93be13548465015ac613efe3f8e7cee2347170f4ae5417"},
+			OrderOptions{TickSize: "0.01"}},
+		{"short metadata",
+			UserOrder{TokenID: token, Price: "0.5", Size: "1", Side: Buy, Metadata: "0x01"},
+			OrderOptions{TickSize: "0.01"}},
+		{"malformed taker",
+			UserOrder{TokenID: token, Price: "0.5", Size: "1", Side: Buy, Taker: "0xnope"},
+			OrderOptions{TickSize: "0.01"}},
+		{"malformed funder",
+			UserOrder{TokenID: token, Price: "0.5", Size: "1", Side: Buy},
+			OrderOptions{TickSize: "0.01", Funder: "not-an-address"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
