@@ -263,6 +263,41 @@ for (const [ts, method, path, body] of [
 	});
 }
 
+
+// ------------------------------------------------------- order book hashes
+
+// The websocket market channel identifies a book snapshot by a SHA-1 over the
+// summary with its own hash field blanked, so a client that keeps a local book
+// can tell whether it has drifted. The digest is taken over JSON.stringify of
+// the parsed object, which means the FIELD ORDER of the server's response is
+// part of the input. These vectors carry the raw bytes as served alongside the
+// hash, so the Go side has something exact to reproduce.
+const bookTokens = [
+	"32338220190071351435772801779725302244575775216413325951443816017994629993401",
+	"25659310674993675562345759665114759892400026242514633218387667107987341231962",
+	"54533043819946592547517511176940999955633860128497669742211153063842200957669",
+];
+const orderBookHashes = [];
+for (const tokenId of bookTokens) {
+	const res = await fetch(`https://clob.polymarket.com/book?token_id=${tokenId}`);
+	if (!res.ok) continue;
+	const raw = await res.text();
+	const book = JSON.parse(raw);
+	const served = book.hash;
+	book.hash = "";
+	const bytes = new TextEncoder().encode(JSON.stringify(book));
+	const digest = await globalThis.crypto.subtle.digest("SHA-1", bytes);
+	const hash = Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
+	orderBookHashes.push({
+		tokenId,
+		fieldOrder: Object.keys(book),
+		raw,
+		servedHash: served ?? null,
+		hash,
+		canonical: JSON.stringify(book),
+	});
+}
+
 // --------------------------------------------------------------- accounts
 
 const accounts = [];
@@ -294,4 +329,5 @@ console.log(JSON.stringify({
 	marketOrders: marketCases,
 	clobAuth,
 	hmac,
+	orderBookHashes,
 }, null, 1));

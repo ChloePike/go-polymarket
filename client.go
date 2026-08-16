@@ -209,7 +209,14 @@ func (c *Client) do(ctx context.Context, r request) error {
 		host = c.clobHost()
 	}
 
-	headers, err := c.authHeaders(r.auth, r.method, path, string(body))
+	// The level-2 HMAC covers the path WITHOUT the query string. That is not
+	// an obvious choice, so it is worth stating why it is certainly right:
+	// the official client signs its headers once and then reuses them across
+	// every page of a paginated loop, changing next_cursor each time, which
+	// is only possible if the query is outside the signature. Signing
+	// path+query produces a 401 the moment any parameter is present —
+	// verified against production.
+	headers, err := c.authHeaders(r.auth, r.method, r.path, string(body))
 	if err != nil {
 		return err
 	}

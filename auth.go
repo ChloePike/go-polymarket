@@ -122,8 +122,10 @@ func (h L2Headers) header() map[string]string {
 
 // BuildL2Headers signs one request with level-2 credentials.
 //
-// requestPath must carry the query string exactly as it will be sent: the HMAC
-// covers it, so a parameter added afterwards invalidates the signature.
+// requestPath is the path ALONE, without a query string. The exchange
+// excludes the query from the signature, which is what lets one set of
+// headers authenticate every page of a paginated walk. Including it produces
+// a 401 as soon as any parameter is present.
 func BuildL2Headers(creds APICreds, address, timestamp, method, requestPath, body string) (L2Headers, error) {
 	sig, err := SignHMAC(creds.Secret, timestamp, method, requestPath, body)
 	if err != nil {
@@ -141,6 +143,9 @@ func BuildL2Headers(creds APICreds, address, timestamp, method, requestPath, bod
 // SignHMAC produces the level-2 request signature:
 //
 //	message   = timestamp ‖ method ‖ requestPath ‖ body
+//
+// requestPath is the bare path; the exchange does not sign the query string.
+//
 //	key       = base64url-decode(secret)
 //	signature = base64url(HMAC-SHA256(key, message))
 //

@@ -138,8 +138,15 @@ signature = base64url(HMAC-SHA256(key, message))
 ```
 
 Headers `POLY_ADDRESS / POLY_SIGNATURE / POLY_API_KEY / POLY_PASSPHRASE /
-POLY_TIMESTAMP`. `requestPath` **includes the query string**, so the client
-renders path and query once and signs exactly what it sends.
+POLY_TIMESTAMP`.
+
+**Trap — the query is not signed.** `requestPath` is the path *alone*. This is
+easy to get backwards, and the failure is invisible until a request carries a
+parameter: signing path+query authenticates fine against an endpoint with no
+query and returns 401 for every filtered or paginated call. The proof that the
+query is excluded is in the official client, which signs one set of headers and
+then reuses them across every page of a pagination loop while `next_cursor`
+changes underneath. Verified against production both ways.
 
 ### Amount math
 

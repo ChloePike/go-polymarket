@@ -128,8 +128,16 @@ const BuilderFeeBps = 10000
 
 // CLOB endpoint paths. Paths ending in a slash take a trailing path element.
 const (
-	epOK        = "/ok"
-	epTime      = "/time"
+	epOK   = "/ok"
+	epTime = "/time"
+
+	// epVersion reports the order version the exchange currently accepts, as
+	// {"version":2}. It has no constant in the official SDK but the SDK calls
+	// it: an order signed for a version the exchange has moved off is rejected
+	// with order_version_mismatch, and the version is what tells a caller to
+	// re-sign rather than retry.
+	epVersion = "/version"
+
 	epHeartbeat = "/v1/heartbeats"
 
 	epCreateAPIKey      = "/auth/api-key"
