@@ -514,3 +514,51 @@ func assertRequest(t *testing.T, got SubmitRequest, want vectorRequest) {
 		t.Errorf("signature =\n\t%s\nwant\n\t%s", got.Signature, want.Signature)
 	}
 }
+
+// A builderHMACCase is one builder-signed request and the signature the
+// official SDK produces for it.
+type builderHMACCase struct {
+	name      string
+	timestamp string
+	method    string
+	path      string
+	body      string
+	want      string
+}
+
+// TestBuilderHeadersMatchTheOfficialSDK pins the relayer's builder credential
+// scheme against @polymarket/builder-signing-sdk.
+//
+// It is the same construction as the CLOB's level-2 headers — the message is
+// the timestamp, the method, the path and the body run together with no
+// separator; the key is the base64-decoded secret; the output is base64 with
+// + and / swapped for - and _ and the padding kept — but "the same as the
+// other one" is a claim, and this is the only live-authenticated surface in
+// the package. These values come from the SDK, not from this client.
+func TestBuilderHeadersMatchTheOfficialSDK(t *testing.T) {
+	const secret = "c2VjcmV0LXNlY3JldC1zZWNyZXQtc2VjcmV0LXNlY3JldA=="
+	creds := BuilderCredentials{Key: "key", Secret: secret, Passphrase: "pass"}
+	cases := []builderHMACCase{
+		{
+			name: "a read with no body", timestamp: "1755000000",
+			method: "GET", path: "/transactions", body: "",
+			want: "BnWFJvCRDxwiXWU2lCmxJXnMjy_DZqDGm3jSPwkUmIM=",
+		},
+		{
+			name: "a submit, body included", timestamp: "1755000000",
+			method: "POST", path: "/submit", body: `{"a":"b"}`,
+			want: "28eQ2GUvFcbcIQhOFAr04kWvhVZhGp9jvCjVkMl7leA=",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, err := BuildBuilderHeaders(creds, tc.timestamp, tc.method, tc.path, tc.body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if h.Signature != tc.want {
+				t.Errorf("signature = %s, want %s", h.Signature, tc.want)
+			}
+		})
+	}
+}
