@@ -72,6 +72,12 @@ order and signs it. Signing an order authorises a trade, so the client checks
 what it can — price inside the tradable band, token id well formed, amounts
 exactly representable — before signing rather than after.
 
+Note where the two imports divide. The **vocabulary of an order** lives in the
+root package, because an order means the same thing however it is sent:
+`UserOrder`, `Buy`, `GTC`, `OrderOptions`. **Sending one** lives in `clob`,
+because that is a property of the endpoint: `SubmitOptions`, `PostOrder`,
+`CancelAll`.
+
 ## Sharing one session
 
 A `Session` carries the wallet, the `http.Client` and the retry policy.
