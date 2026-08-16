@@ -65,6 +65,25 @@ When you do need REST for many tokens, use the plural endpoints — `Books`,
 `Midpoints`, `Prices`, `Spreads` take a list and answer in one round trip.
 They return maps keyed by token id, not lists.
 
+**You cannot place an order over the websocket.** Both CLOB channels are
+read-only feeds. The formal AsyncAPI spec for the market channel lists every
+message it knows about — `subscriptionRequest`, `subscriptionRequestUpdate`,
+`ping`, `pong`, and the seven inbound event types — and none of them is an
+order. The user channel takes an auth frame and subscribe/unsubscribe
+operations, and pushes your orders and fills back; it accepts no commands
+either. Order entry is `POST /order`, over HTTP, and the official TypeScript
+client contains no websocket code at all.
+
+The one exception is the RFQ gateway, a separate host where a market maker
+sends `RFQ_QUOTE`, `RFQ_QUOTE_CANCEL` and `RFQ_CONFIRMATION_RESPONSE` frames —
+that is quoting into a request-for-quote flow with a last-look step, not
+posting to the book. It is documented but not implemented here and not
+verified live. Perpetuals also publish `wss/perps-orders` documentation; that
+is a different product from the prediction-market CLOB this client targets.
+
+So the shape of a trading loop is settled by the protocol, not by taste:
+stream the book, submit over REST.
+
 ## Money math
 
 Prices and sizes are decimal **strings** all the way to the wire. That is not
@@ -87,23 +106,45 @@ is a signed commitment to the wrong number.
 Reads retry twice on a connection failure. Writes never do, at any level, and
 your own code should hold the same line.
 
-**A timed-out `PostOrder` is not a failed `PostOrder`.** The request may have
-arrived. Resending it is how an account ends up holding twice the position it
-asked for. On a timeout, reconcile:
+**Classify the failure before you do anything about it.** Most failed writes
+created nothing and need no reconciliation: a 400 means the exchange read the
+order and refused it, a 401 means it never got past auth, and a local
+validation failure never left the process. Querying open orders after one of
+those is a wasted round trip on every rejected order — and on a busy desk that
+is a lot of wasted round trips.
+
+The failures that matter are the ones where nobody knows: a dropped
+connection, a timeout, a 5xx. There the exchange may have received the order,
+acted on it, and failed to say so. `Indeterminate` draws that line:
 
 ```go
 resp, err := c.PostOrder(ctx, order, polymarket.GTC, clob.SubmitOptions{})
-if err != nil {
-    // Do not resubmit. Find out what actually happened.
+switch {
+case err == nil:
+    handle(resp)
+
+case !polymarket.Indeterminate(err):
+    // Refused, or never sent. No order exists; nothing to reconcile.
+    // Fix the order, or back off on a 429, and move on.
+    return err
+
+default:
+    // Its fate is unknown. Find out — never resubmit.
     orders, _, qerr := c.OpenOrders(ctx, clob.OpenOrderParams{Market: conditionID}, "")
     ...
 }
 ```
 
-Give every order a client-side identity you can recognise — a deterministic
-salt derived from your own order id makes an order idempotent in practice,
-because the same salt produces the same signature and the exchange sees a
-duplicate rather than a second order.
+**A timed-out `PostOrder` is not a failed `PostOrder`.** That is the whole
+reason the distinction exists. Resending a request that may have arrived is
+how an account ends up holding twice the position it asked for, and it is
+indistinguishable from a legitimate second order at the exchange.
+
+Give every order a client-side identity you can recognise during that
+reconciliation. A deterministic salt derived from your own order id makes an
+order idempotent in practice: the same salt produces the same signature, so a
+resubmission the exchange has already seen is a duplicate rather than a second
+position.
 
 **`order_version_mismatch` means rebuild, not retry.** The exchange has moved
 to a different order version; the bytes you signed are for the old one. Call
@@ -190,6 +231,7 @@ exchange.
 1. One session, reused. Check your clock.
 2. Stream the book; rebuild it on reconnect; verify the hash.
 3. Strings for money, never floats. Fees before sizing.
-4. A timed-out write is not a failed write. Reconcile, never resubmit.
+4. Classify a failed write with `Indeterminate` before reacting. A refusal
+   needs no reconciliation; an unknown fate needs one, and never a resubmit.
 5. Branch on status codes, not on error text.
 6. Sign through `TypedDataSigner` if anyone will ever ask what you signed.

@@ -20,7 +20,48 @@ var (
 	// credentials. Obtain them with the clob package's key handshake, or
 	// supply them with WithCredentials.
 	ErrNoCredentials = errors.New("polymarket: operation needs API credentials")
+
+	// ErrNotSent wraps every failure that happens before a request leaves
+	// this process. It is what lets a caller tell "the exchange refused
+	// this" and "this never got there" apart from "nobody knows", which is
+	// the distinction that decides whether resubmitting an order is safe.
+	// See Indeterminate.
+	ErrNotSent = errors.New("polymarket: request was not sent")
 )
+
+// Indeterminate reports whether err leaves it unknown what the exchange did.
+//
+// This is the question to ask after a write fails. A request that was never
+// sent, and a request the exchange answered with a 4xx, both definitely had
+// no effect: the order does not exist and building a new one is safe. A
+// connection that dropped, a timeout, or a 5xx is different — the exchange
+// may have received the order, acted on it, and failed to say so.
+//
+//	if _, err := c.PostOrder(ctx, order, polymarket.GTC, opts); err != nil {
+//		if !polymarket.Indeterminate(err) {
+//			return err // refused or never sent; nothing exists to reconcile
+//		}
+//		// Its fate is unknown. Find out; do not resubmit.
+//		reconcile(ctx, order)
+//	}
+//
+// Unrecognised errors are reported as indeterminate. Treating an unknown
+// failure as harmless is how an account ends up holding a position twice.
+func Indeterminate(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrNotSent) || errors.Is(err, ErrNoSigner) || errors.Is(err, ErrNoCredentials) {
+		return false
+	}
+	var apiErr *Error
+	if errors.As(err, &apiErr) {
+		// The exchange answered. A 4xx is a refusal and nothing was
+		// created; a 5xx may have been a failure to report a success.
+		return apiErr.StatusCode >= 500
+	}
+	return true
+}
 
 // An Error reports a request the API refused. Inspect StatusCode to tell a
 // bad request from a rate limit or an outage:

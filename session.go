@@ -173,7 +173,7 @@ func (s *Session) Do(ctx context.Context, r Request) error {
 	if r.Body != nil {
 		var err error
 		if body, err = json.Marshal(r.Body); err != nil {
-			return fmt.Errorf("polymarket: encoding request body: %w", err)
+			return fmt.Errorf("polymarket: encoding request body: %w: %w", err, ErrNotSent)
 		}
 	}
 
@@ -193,7 +193,7 @@ func (s *Session) Do(ctx context.Context, r Request) error {
 	}
 	req, err := http.NewRequestWithContext(ctx, r.Method, target, reader)
 	if err != nil {
-		return fmt.Errorf("polymarket: building request: %w", err)
+		return fmt.Errorf("polymarket: building request: %w: %w", err, ErrNotSent)
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", s.userAgent)

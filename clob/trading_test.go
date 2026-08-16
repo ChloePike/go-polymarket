@@ -587,3 +587,98 @@ func TestTradingNeedsCredentials(t *testing.T) {
 		t.Error("an unauthenticated submission was sent")
 	}
 }
+
+// indeterminateCase is one failure and whether the fate of the request it
+// belongs to is unknown.
+type indeterminateCase struct {
+	name string
+	// status is the HTTP status the server answers with; zero means the
+	// request never reaches a server.
+	status int
+	call   func(*Client) error
+	want   bool
+}
+
+// TestIndeterminateClassifiesWriteFailures is the test behind the reconcile
+// rule. Resubmitting after a refusal is noise; resubmitting after a timeout is
+// a duplicate position, so the two must be distinguishable without reading
+// error text.
+func TestIndeterminateClassifiesWriteFailures(t *testing.T) {
+	post := func(c *Client) error {
+		_, err := c.PostOrder(context.Background(), signedTestOrder(t, ""),
+			polymarket.GTC, SubmitOptions{})
+		return err
+	}
+	cases := []indeterminateCase{
+		{"exchange refused the order", http.StatusBadRequest, post, false},
+		{"credentials rejected", http.StatusUnauthorized, post, false},
+		{"rate limited", http.StatusTooManyRequests, post, false},
+		{"exchange broke", http.StatusInternalServerError, post, true},
+		{"gateway timed out", http.StatusGatewayTimeout, post, true},
+		{"post-only on a fill-or-kill order", 0, func(c *Client) error {
+			_, err := c.PostOrder(context.Background(), signedTestOrder(t, ""),
+				polymarket.FOK, SubmitOptions{PostOnly: true})
+			return err
+		}, false},
+		{"order was never signed", 0, func(c *Client) error {
+			order := signedTestOrder(t, "")
+			order.Signature = ""
+			_, err := c.PostOrder(context.Background(), order, polymarket.GTC, SubmitOptions{})
+			return err
+		}, false},
+		{"no credentials", 0, func(c *Client) error {
+			_, err := New(WithHost("http://127.0.0.1:1")).PostOrder(context.Background(),
+				signedTestOrder(t, ""), polymarket.GTC, SubmitOptions{})
+			return err
+		}, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.status != 0 {
+					w.WriteHeader(tc.status)
+				}
+				io.WriteString(w, `{"error":"nope"}`)
+			}))
+			defer srv.Close()
+
+			err := tc.call(authedClient(t, srv.URL))
+			if err == nil {
+				t.Fatal("got nil error")
+			}
+			if got := polymarket.Indeterminate(err); got != tc.want {
+				t.Errorf("Indeterminate(%v) = %v, want %v", err, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestIndeterminateOnTransportFailure checks the case that matters most: the
+// connection died and nobody knows whether the order arrived.
+func TestIndeterminateOnTransportFailure(t *testing.T) {
+	// A server that accepts the connection and closes it without answering
+	// is exactly the ambiguous case.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Skip("the test server does not support hijacking")
+		}
+		conn, _, err := hijacker.Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		conn.Close()
+	}))
+	defer srv.Close()
+
+	_, err := authedClient(t, srv.URL).PostOrder(context.Background(),
+		signedTestOrder(t, ""), polymarket.GTC, SubmitOptions{})
+	if err == nil {
+		t.Fatal("got nil error")
+	}
+	if !polymarket.Indeterminate(err) {
+		t.Errorf("a dropped connection was reported as determinate: %v", err)
+	}
+}

@@ -322,7 +322,8 @@ type SubmitOptions struct {
 // ErrPostOnlyMarketOrder reports a combination the exchange always rejects:
 // a fill-or-kill or fill-and-kill order exists to take liquidity, so it
 // cannot also be post-only.
-var ErrPostOnlyMarketOrder = fmt.Errorf("polymarket: postOnly cannot be used with a FOK or FAK order")
+var ErrPostOnlyMarketOrder = fmt.Errorf(
+	"polymarket: postOnly cannot be used with a FOK or FAK order: %w", polymarket.ErrNotSent)
 
 // PostOrder submits one signed order. Level 2, and the account must hold the
 // credentials the order will be attributed to.
@@ -352,7 +353,7 @@ type OrderSubmission struct {
 // per submission, in the same order.
 func (c *Client) PostOrders(ctx context.Context, orders []OrderSubmission, opts SubmitOptions) ([]OrderResponse, error) {
 	if len(orders) == 0 {
-		return nil, fmt.Errorf("polymarket: PostOrders needs at least one order")
+		return nil, fmt.Errorf("polymarket: PostOrders needs at least one order: %w", polymarket.ErrNotSent)
 	}
 	owner := c.owner()
 	bodies := make([]postOrderRequest, 0, len(orders))
@@ -374,11 +375,11 @@ func submissionBody(o polymarket.SignedOrder, orderType polymarket.OrderType, ow
 		return postOrderRequest{}, ErrPostOnlyMarketOrder
 	}
 	if o.Signature == "" {
-		return postOrderRequest{}, fmt.Errorf("polymarket: order is not signed")
+		return postOrderRequest{}, fmt.Errorf("polymarket: order is not signed: %w", polymarket.ErrNotSent)
 	}
 	salt, err := strconv.ParseInt(o.Salt, 10, 64)
 	if err != nil {
-		return postOrderRequest{}, fmt.Errorf("polymarket: order salt %q is not an integer: %w", o.Salt, err)
+		return postOrderRequest{}, fmt.Errorf("polymarket: order salt %q is not an integer: %w: %w", o.Salt, err, polymarket.ErrNotSent)
 	}
 	return postOrderRequest{
 		DeferExec: opts.DeferExec,
@@ -461,7 +462,7 @@ type MarketCancelParams struct {
 // market. Level 2.
 func (c *Client) CancelMarketOrders(ctx context.Context, p MarketCancelParams) (CancelResponse, error) {
 	if p.Market == "" && p.AssetID == "" {
-		return CancelResponse{}, fmt.Errorf("polymarket: CancelMarketOrders needs a market or an asset id")
+		return CancelResponse{}, fmt.Errorf("polymarket: CancelMarketOrders needs a market or an asset id: %w", polymarket.ErrNotSent)
 	}
 	var out CancelResponse
 	err := c.session.DeleteL2(ctx, epCancelMarketOrders, p, &out)
