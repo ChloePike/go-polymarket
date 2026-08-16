@@ -310,22 +310,44 @@ func (c *Client) SupportedAssets(ctx context.Context) (SupportedAssetsResponse, 
 // POST /quote
 func (c *Client) Quote(ctx context.Context, req QuoteRequest) (QuoteResponse, error) {
 	var out QuoteResponse
-	err := c.post(ctx, epQuote, req, &out)
+	err := c.post(ctx, epQuote, req, &out, Attribution{})
 	return out, err
 }
+
+// An Attribution names the builder a bridge transfer is credited to.
+//
+// It is optional on every endpoint that takes it. Omitting it still succeeds;
+// the bridge answers with a missing_builder_code warning and the transfer is
+// unattributed.
+type Attribution struct {
+	// BuilderCode is a bytes32 hex string, the same form a builder code takes
+	// on an order. Empty sends no attribution.
+	BuilderCode string
+}
+
+// header renders the attribution, or nil when there is none.
+func (a Attribution) header() map[string]string {
+	if a.BuilderCode == "" {
+		return nil
+	}
+	return map[string]string{headerBuilderCode: a.BuilderCode}
+}
+
+// headerBuilderCode attributes a bridge transfer. Unlike an order's builder
+// code this one is a header rather than a signed field, so it is advisory:
+// nothing stops it being changed in flight.
+const headerBuilderCode = "X-Builder-Code"
 
 // Deposit creates the bridge deposit addresses for one Polymarket wallet, one
 // per chain family. Funds sent to them are bridged, swapped and credited to
 // that wallet. It needs no authentication.
 //
-// address is the Polymarket wallet to credit, as 0x-hex. The optional
-// X-Builder-Code attribution header is not sent — see this file's notes on
-// authentication — which the bridge accepts.
+// address is the Polymarket wallet to credit, as 0x-hex.
 //
 // POST /deposit
-func (c *Client) Deposit(ctx context.Context, address string) (DepositResponse, error) {
+func (c *Client) Deposit(ctx context.Context, address string, attribution Attribution) (DepositResponse, error) {
 	var out DepositResponse
-	err := c.post(ctx, epDeposit, depositRequest{Address: address}, &out)
+	err := c.post(ctx, epDeposit, depositRequest{Address: address}, &out, attribution)
 	return out, err
 }
 
@@ -335,13 +357,12 @@ func (c *Client) Deposit(ctx context.Context, address string) (DepositResponse, 
 // own on a withdrawal.
 //
 // The address returned is single-purpose: create one when the withdrawal is
-// ready, never in advance. It needs no authentication, and the optional
-// X-Builder-Code attribution header is not sent.
+// ready, never in advance. It needs no authentication.
 //
 // POST /withdraw
-func (c *Client) Withdraw(ctx context.Context, req WithdrawRequest) (DepositResponse, error) {
+func (c *Client) Withdraw(ctx context.Context, req WithdrawRequest, attribution Attribution) (DepositResponse, error) {
 	var out DepositResponse
-	err := c.post(ctx, epWithdraw, req, &out)
+	err := c.post(ctx, epWithdraw, req, &out, attribution)
 	return out, err
 }
 
@@ -383,12 +404,13 @@ func (c *Client) Status(ctx context.Context, address string, p StatusParams) (St
 // rather than a PostL2 helper because these endpoints take a body but no
 // authentication — AuthNone, polymarket.Request's zero value, is the level a
 // public POST needs.
-func (c *Client) post(ctx context.Context, path string, body, out any) error {
+func (c *Client) post(ctx context.Context, path string, body, out any, attribution Attribution) error {
 	req := polymarket.Request{
-		Method: http.MethodPost,
-		Path:   path,
-		Body:   body,
-		Out:    out,
+		Method:  http.MethodPost,
+		Path:    path,
+		Body:    body,
+		Out:     out,
+		Headers: attribution.header(),
 	}
 	return c.session.Do(ctx, req)
 }

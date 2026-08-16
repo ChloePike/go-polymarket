@@ -344,7 +344,7 @@ func TestDepositPostsAddress(t *testing.T) {
 	})
 
 	const wallet = "0x56687bf447db6ffa42ffe2204a05edaa20f55839"
-	got, err := c.Deposit(context.Background(), wallet)
+	got, err := c.Deposit(context.Background(), wallet, Attribution{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,7 +390,7 @@ func TestWithdrawPostsBody(t *testing.T) {
 		ToTokenAddress: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
 		RecipientAddr:  "0x17eC161f126e82A8ba337f4022d574DBEaFef575",
 	}
-	got, err := c.Withdraw(context.Background(), req)
+	got, err := c.Withdraw(context.Background(), req, Attribution{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -653,5 +653,48 @@ func TestDefaultHostIsPaced(t *testing.T) {
 	}
 	if c.session.Limiter() == nil {
 		t.Error("session has no limiter: BridgeRateLimits should attach to BridgeHost")
+	}
+}
+
+// An attributionCase is one attribution and the header value it should put on
+// the wire, or "" when it should send none.
+type attributionCase struct {
+	name string
+	code string
+	want string
+}
+
+// TestAttributionReachesTheWire checks the one header these endpoints take.
+// It is not signed and not authentication — a builder code on an order is a
+// signed field, this one is advisory — so the only thing to get right is that
+// it is sent when given and absent when not.
+func TestAttributionReachesTheWire(t *testing.T) {
+	cases := []attributionCase{
+		{"a builder code", "0x00000000000000000000000000000000000000000000000000000000abcd1234",
+			"0x00000000000000000000000000000000000000000000000000000000abcd1234"},
+		{"no attribution", "", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got string
+			var present bool
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got = r.Header.Get("X-Builder-Code")
+				_, present = r.Header["X-Builder-Code"]
+				w.Write([]byte(`{}`))
+			}))
+			defer srv.Close()
+
+			c := New(WithHost(srv.URL))
+			if _, err := c.Deposit(context.Background(), "0xabc", Attribution{BuilderCode: tc.code}); err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Errorf("X-Builder-Code = %q, want %q", got, tc.want)
+			}
+			if tc.want == "" && present {
+				t.Error("an empty attribution sent the header anyway")
+			}
+		})
 	}
 }
