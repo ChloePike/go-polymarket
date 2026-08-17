@@ -371,6 +371,25 @@ query is excluded is in the official client, which signs one set of headers and
 then reuses them across every page of a pagination loop while `next_cursor`
 changes underneath. Verified against production both ways.
 
+#### Where the secrets may live
+
+Neither key has to be in this process. The wallet key is behind `Signer`
+already; the API secret is behind `L2Authenticator`, which takes a request and
+returns its five headers, so a KMS or a signing service can hold it. Three
+things bound that:
+
+| | Held by | Seam |
+|---|---|---|
+| wallet key | `Signer` / `TypedDataSigner` | sees the digest, or the whole payload |
+| CLOB level-2 secret | `APICreds` or an `L2Authenticator` | signs one request at a time |
+| relayer credentials | `APIKeyCredentials`, `BuilderCredentials` or a `relayer.Authenticator` | same shape, headers as a map |
+
+`POLY_ADDRESS` names the wallet and not the credential, so a level-2 request
+needs a `Signer` whatever holds the secret. And the websocket user channel
+sends the secret itself in its subscribe frame — a protocol fact, not an
+omission here — so there is nothing for an authenticator to protect on that
+socket.
+
 ### Amount math
 
 Rounding limits come from the market tick size:

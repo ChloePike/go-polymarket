@@ -216,3 +216,98 @@ func TestMissingCredentialsIsNotSent(t *testing.T) {
 		t.Error("a request that was never sent was reported as indeterminate")
 	}
 }
+
+// TestAuthenticatorSignsTheRequest checks the seam that lets the API secret
+// stay out of this process: a session built with an L2Authenticator sends the
+// headers it produced, and asks it to sign the method, the bare path and the
+// body — not the query string, which the exchange does not sign.
+func TestAuthenticatorSignsTheRequest(t *testing.T) {
+	var got http.Header
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Clone()
+		w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	key, err := NewPrivateKey("0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80")
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := &recordingAuthenticator{key: "a-key-id"}
+	s := NewSession(srv.URL, WithSigner(key), WithL2Authenticator(auth))
+
+	if s.Credentials() != nil {
+		t.Error("a session holding no secret reported credentials")
+	}
+	if s.APIKey() != "a-key-id" {
+		t.Errorf("APIKey() = %q, want the authenticator's", s.APIKey())
+	}
+
+	q := url.Values{"cursor": []string{"MTAw"}}
+	if err := s.Do(context.Background(), Request{
+		Method: http.MethodPost, Path: "/order", Query: q, Auth: AuthL2,
+		Body: map[string]int{"size": 1},
+	}); err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+
+	if len(auth.requests) != 1 {
+		t.Fatalf("the authenticator signed %d requests, want 1", len(auth.requests))
+	}
+	signed := auth.requests[0]
+	if signed.Address != key.Address() {
+		t.Errorf("signed for %s, want the wallet %s", signed.Address, key.Address())
+	}
+	if signed.RequestPath != "/order" {
+		t.Errorf("signed path %q, want the bare path", signed.RequestPath)
+	}
+	if signed.Body != `{"size":1}` {
+		t.Errorf("signed body %q, want the encoded body", signed.Body)
+	}
+	if got.Get("POLY_SIGNATURE") != "signed-elsewhere" {
+		t.Errorf("POLY_SIGNATURE = %q, want the authenticator's", got.Get("POLY_SIGNATURE"))
+	}
+	if got.Get("POLY_PASSPHRASE") != "from-the-service" {
+		t.Errorf("POLY_PASSPHRASE = %q, want the authenticator's", got.Get("POLY_PASSPHRASE"))
+	}
+}
+
+// TestAuthenticatorStillNeedsTheWallet pins the bound on the seam: POLY_ADDRESS
+// names the wallet rather than the credential, so a level-2 request needs a
+// Signer even when the secret lives elsewhere.
+func TestAuthenticatorStillNeedsTheWallet(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("a request with no wallet was sent")
+	}))
+	t.Cleanup(srv.Close)
+
+	s := NewSession(srv.URL, WithL2Authenticator(&recordingAuthenticator{key: "a-key-id"}))
+	err := s.PostL2(context.Background(), "/order", map[string]string{}, nil)
+	if !errors.Is(err, ErrNoSigner) {
+		t.Errorf("error = %v, want ErrNoSigner", err)
+	}
+}
+
+// TestCredentialsInstallAnAuthenticator checks that the two ways in agree:
+// credentials given by option or adopted after the level-1 handshake both
+// become what signs, and both keep reporting themselves.
+func TestCredentialsInstallAnAuthenticator(t *testing.T) {
+	creds := APICreds{Key: "k", Secret: "PLoJhxT8V3PMEHtGZFLD9YfKKW3Kx0QfC5wY1qkq_iM=", Passphrase: "p"}
+
+	s := NewSession("https://example.invalid", WithCredentials(creds))
+	if s.Authenticator() == nil {
+		t.Error("credentials given by option did not become an authenticator")
+	}
+	if s.APIKey() != "k" {
+		t.Errorf("APIKey() = %q, want k", s.APIKey())
+	}
+
+	fresh := NewSession("https://example.invalid")
+	if fresh.Authenticator() != nil || fresh.APIKey() != "" {
+		t.Error("a session with no credentials reported some")
+	}
+	fresh.SetCredentials(creds)
+	if fresh.Authenticator() == nil || fresh.Credentials() == nil {
+		t.Error("adopted credentials did not take effect")
+	}
+}

@@ -30,6 +30,7 @@ type Session struct {
 	httpClient *http.Client
 	signer     Signer
 	creds      *APICreds
+	l2         L2Authenticator
 	chainID    int64
 	userAgent  string
 	retries    int
@@ -64,7 +65,23 @@ func WithSigner(signer Signer) Option {
 // WithCredentials supplies level-2 credentials directly, skipping the
 // level-1 handshake. Use it to reuse a key across processes.
 func WithCredentials(creds APICreds) Option {
-	return func(s *Session) { s.creds = &creds }
+	return func(s *Session) {
+		s.creds = &creds
+		s.l2 = creds
+	}
+}
+
+// WithL2Authenticator supplies level-2 authentication without the secret.
+//
+// It is the option for credentials this process is not allowed to hold: the
+// authenticator signs each request wherever the secret actually lives. See
+// L2Authenticator, which documents what it can and cannot cover.
+//
+// Credentials reports nil for a session configured this way, because there
+// are none here to report. Everything that needs the key alone — an order's
+// attribution — reads it from the authenticator.
+func WithL2Authenticator(a L2Authenticator) Option {
+	return func(s *Session) { s.l2 = a }
 }
 
 // WithChainID selects the chain whose exchange contracts orders are signed
@@ -143,12 +160,37 @@ func (s *Session) ChainID() int64 { return s.chainID }
 func (s *Session) Signer() Signer { return s.signer }
 
 // Credentials reports the level-2 credentials, or nil when the session has
-// none yet.
+// none of its own: it never had any, or it authenticates through an
+// L2Authenticator that holds them elsewhere.
 func (s *Session) Credentials() *APICreds { return s.creds }
 
 // SetCredentials adopts level-2 credentials, as the level-1 handshake does on
 // success.
-func (s *Session) SetCredentials(creds APICreds) { s.creds = &creds }
+func (s *Session) SetCredentials(creds APICreds) {
+	s.creds = &creds
+	s.l2 = creds
+}
+
+// Authenticator reports what signs this session's level-2 requests, or nil
+// when nothing does yet.
+func (s *Session) Authenticator() L2Authenticator { return s.l2 }
+
+// SetAuthenticator adopts an L2Authenticator, for a session whose credentials
+// arrive after construction.
+//
+// Call it before the first authenticated request. A Session is otherwise safe
+// for concurrent use; this is not, and neither is SetCredentials.
+func (s *Session) SetAuthenticator(a L2Authenticator) { s.l2 = a }
+
+// APIKey reports the level-2 key this session authenticates with, or "" when
+// it has none. It is not a secret: it identifies which key signed, and an
+// order carries it as its owner.
+func (s *Session) APIKey() string {
+	if s.l2 == nil {
+		return ""
+	}
+	return s.l2.APIKey()
+}
 
 // An AuthLevel selects how a request proves who is sending it.
 type AuthLevel int
@@ -357,14 +399,15 @@ func (s *Session) authHeaders(level AuthLevel, method, path, body string) (map[s
 		return h.Header(), nil
 
 	case AuthL2:
-		if s.creds == nil {
+		if s.l2 == nil {
 			return nil, ErrNoCredentials
 		}
+		// POLY_ADDRESS names the wallet, not the credential, so a level-2
+		// request needs the Signer even when the secret lives elsewhere.
 		if s.signer == nil {
 			return nil, ErrNoSigner
 		}
-		ts := strconv.FormatInt(time.Now().Unix(), 10)
-		h, err := BuildL2Headers(*s.creds, s.signer.Address(), ts, method, path, body)
+		h, err := s.l2.AuthHeaders(s.signer.Address(), method, path, body)
 		if err != nil {
 			return nil, err
 		}

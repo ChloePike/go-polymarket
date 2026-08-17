@@ -5,6 +5,7 @@ package polymarket
 
 import (
 	"encoding/hex"
+	"strings"
 	"testing"
 )
 
@@ -100,5 +101,86 @@ func TestBuildL2Headers(t *testing.T) {
 	m := h.Header()
 	if m["POLY_API_KEY"] != "key-1" || m["POLY_PASSPHRASE"] != "pass-1" {
 		t.Errorf("credentials not carried into headers: %v", m)
+	}
+}
+
+// A recordingAuthenticator is an L2Authenticator that holds no secret: it
+// stands in for a signing service, records what it was asked to sign, and
+// answers with a fixed signature. It exists to prove a session can
+// authenticate with nothing secret in this process.
+type recordingAuthenticator struct {
+	key      string
+	requests []signedRequest
+}
+
+// A signedRequest is one request an authenticator was asked to sign.
+type signedRequest struct {
+	Address     string
+	Method      string
+	RequestPath string
+	Body        string
+}
+
+func (a *recordingAuthenticator) APIKey() string { return a.key }
+
+func (a *recordingAuthenticator) AuthHeaders(address, method, requestPath, body string) (L2Headers, error) {
+	a.requests = append(a.requests, signedRequest{address, method, requestPath, body})
+	return L2Headers{
+		Address:    address,
+		Signature:  "signed-elsewhere",
+		APIKey:     a.key,
+		Passphrase: "from-the-service",
+		Timestamp:  "1740000000",
+	}, nil
+}
+
+// TestAPICredsAuthenticateAsThemselves checks that the in-memory
+// implementation signs exactly what BuildL2Headers does. It cannot control the
+// clock, so it signs again with the timestamp that came back: a header set
+// carrying one timestamp and a signature over another is rejected by the
+// exchange, and that is the mistake this catches.
+func TestAPICredsAuthenticateAsThemselves(t *testing.T) {
+	creds := APICreds{
+		Key:        "0c9e0eaa-f4f0-4d1e-8b7e-b3b1b7b0b0b0",
+		Secret:     "PLoJhxT8V3PMEHtGZFLD9YfKKW3Kx0QfC5wY1qkq_iM=",
+		Passphrase: "a passphrase",
+	}
+	const address = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+
+	got, err := creds.AuthHeaders(address, "POST", "/order", `{"order":1}`)
+	if err != nil {
+		t.Fatalf("AuthHeaders: %v", err)
+	}
+	want, err := BuildL2Headers(creds, address, got.Timestamp, "POST", "/order", `{"order":1}`)
+	if err != nil {
+		t.Fatalf("BuildL2Headers: %v", err)
+	}
+	if got != want {
+		t.Errorf("headers = %+v, want %+v", got, want)
+	}
+	if creds.APIKey() != creds.Key {
+		t.Errorf("APIKey() = %s, want %s", creds.APIKey(), creds.Key)
+	}
+}
+
+// TestCredentialsFromEnv covers the loader, including the partial set that
+// authenticates as nobody.
+func TestCredentialsFromEnv(t *testing.T) {
+	t.Setenv(EnvAPIKey, "key")
+	t.Setenv(EnvAPISecret, "secret")
+	t.Setenv(EnvAPIPassphrase, "passphrase")
+	creds, err := CredentialsFromEnv()
+	if err != nil {
+		t.Fatalf("CredentialsFromEnv: %v", err)
+	}
+	if creds.Key != "key" || creds.Secret != "secret" || creds.Passphrase != "passphrase" {
+		t.Errorf("credentials = %+v", creds)
+	}
+
+	t.Setenv(EnvAPISecret, "")
+	if _, err := CredentialsFromEnv(); err == nil {
+		t.Error("loaded a partial credential set")
+	} else if !strings.Contains(err.Error(), EnvAPISecret) {
+		t.Errorf("error %v does not name the missing variable", err)
 	}
 }

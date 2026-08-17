@@ -9,8 +9,10 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // The CLOB has two levels of authentication.
@@ -27,6 +29,87 @@ type APICreds struct {
 	Key        string `json:"apiKey"`
 	Secret     string `json:"secret"`
 	Passphrase string `json:"passphrase"`
+}
+
+// APIKey returns the credential's key, which identifies it and is not secret.
+func (c APICreds) APIKey() string { return c.Key }
+
+// AuthHeaders signs one request, timestamped now. It is what makes APICreds an
+// L2Authenticator, and it is the implementation a session uses when the
+// credentials are held in this process.
+func (c APICreds) AuthHeaders(address, method, requestPath, body string) (L2Headers, error) {
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	return BuildL2Headers(c, address, ts, method, requestPath, body)
+}
+
+// An L2Authenticator renders the level-2 headers for one request.
+//
+// Implement it when the API secret must not enter this process: a KMS, an
+// HSM, or a signing service that holds the secret and returns signatures.
+// APICreds is the implementation for a secret held in memory, and is what
+// WithCredentials installs.
+//
+// It is the level-2 counterpart of Signer, which already lets the wallet key
+// live elsewhere, and the sibling of relayer.Authenticator, which does the
+// same for the relayer's credentials. This one returns typed headers rather
+// than a map because the CLOB's set is fixed.
+//
+// Two limits are worth knowing before building one:
+//
+//   - The address still comes from the session's Signer, because POLY_ADDRESS
+//     names the wallet rather than the credential. A session with an
+//     authenticator and no Signer cannot make a level-2 request. Signer is an
+//     interface too, so a remote one satisfies this without a key here.
+//   - It protects the CLOB's REST requests only. The websocket user channel
+//     authenticates by putting the secret itself in the subscribe frame, so
+//     there is nothing there for a signing service to hold back.
+//
+// An implementation must sign the request it was given: the timestamp it
+// returns in the headers must be the one it signed, or the exchange answers
+// 401.
+type L2Authenticator interface {
+	// APIKey returns the credential's key. It travels in the clear and
+	// identifies which key signed; an order is attributed to it.
+	APIKey() string
+
+	// AuthHeaders returns the headers authenticating one request.
+	// requestPath is the bare path, without a query string, and body is the
+	// encoded request body or "" when there is none.
+	AuthHeaders(address, method, requestPath, body string) (L2Headers, error)
+}
+
+// The environment variables CredentialsFromEnv reads.
+const (
+	EnvAPIKey        = "POLYMARKET_API_KEY"
+	EnvAPISecret     = "POLYMARKET_API_SECRET"
+	EnvAPIPassphrase = "POLYMARKET_API_PASSPHRASE"
+)
+
+// CredentialsFromEnv loads level-2 credentials from the environment, which is
+// where they belong: a secret in a source file is a secret that has been
+// published. It reports an error naming what is missing rather than returning
+// a partial set, because a partial set authenticates as nobody.
+func CredentialsFromEnv() (APICreds, error) {
+	creds := APICreds{
+		Key:        os.Getenv(EnvAPIKey),
+		Secret:     os.Getenv(EnvAPISecret),
+		Passphrase: os.Getenv(EnvAPIPassphrase),
+	}
+	var missing []string
+	if creds.Key == "" {
+		missing = append(missing, EnvAPIKey)
+	}
+	if creds.Secret == "" {
+		missing = append(missing, EnvAPISecret)
+	}
+	if creds.Passphrase == "" {
+		missing = append(missing, EnvAPIPassphrase)
+	}
+	if len(missing) > 0 {
+		return APICreds{}, fmt.Errorf("polymarket: no credentials in the environment: %s unset",
+			strings.Join(missing, ", "))
+	}
+	return creds, nil
 }
 
 // ClobAuthDigest returns the level-1 EIP-712 digest for an address at a

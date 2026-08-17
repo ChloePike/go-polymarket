@@ -131,6 +131,13 @@ func WithCredentials(creds polymarket.APICreds) Option {
 	return sessionOption{opt: polymarket.WithCredentials(creds)}
 }
 
+// WithL2Authenticator supplies the CLOB's level-2 authenticator, which the
+// relayer does not accept either. The relayer's own equivalent is
+// WithAuthenticator, whose Authenticator interface is this package's.
+func WithL2Authenticator(a polymarket.L2Authenticator) Option {
+	return sessionOption{opt: polymarket.WithL2Authenticator(a)}
+}
+
 // WithChainID selects the chain whose exchange contracts orders are signed
 // against. The default is ChainPolygon.
 func WithChainID(chainID int64) Option { return sessionOption{opt: polymarket.WithChainID(chainID)} }

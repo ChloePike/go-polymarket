@@ -212,6 +212,33 @@ The digest has a single implementation, so the payload an auditor reads and
 the bytes a wallet signs cannot drift apart, and this client checks that the
 returned signature recovers to the signing address before sending it.
 
+The API secret has the same seam. `WithCredentials` holds the level-2 triple
+in memory; `WithL2Authenticator` does not hold it at all — the interface takes
+a request and returns its headers, so the secret can stay in a KMS, an HSM or
+a signing service:
+
+```go
+type L2Authenticator interface {
+    APIKey() string
+    AuthHeaders(address, method, requestPath, body string) (polymarket.L2Headers, error)
+}
+
+c := clob.New(clob.WithSigner(remoteSigner), clob.WithL2Authenticator(kms))
+```
+
+The relayer's credentials have had the same hook all along, as
+`relayer.WithAuthenticator`. Two bounds are worth knowing: `POLY_ADDRESS`
+names the wallet rather than the credential, so a level-2 request still needs
+a `Signer` — itself an interface a remote signer satisfies — and the websocket
+user channel authenticates by putting the secret in the subscribe frame, where
+no signing service can stand in for it.
+
+Credentials also load from the environment, which is where they belong:
+
+```go
+creds, err := polymarket.CredentialsFromEnv()   // POLYMARKET_API_KEY, _SECRET, _PASSPHRASE
+```
+
 ## Documentation
 
 - **[TRADING.md](TRADING.md)** — running this in production: sessions, rate

@@ -19,6 +19,11 @@ import (
 // verification did not exercise the user channel, since doing so needs
 // real account credentials, out of scope for the task this package was
 // built for (see package doc).
+//
+// That shape also means the secret itself goes over the wire, so
+// polymarket.L2Authenticator — which keeps the secret out of this process for
+// REST requests — has nothing to protect here. A caller whose secret must
+// stay in a signing service cannot use this channel at all.
 type Credentials struct {
 	APIKey     string
 	Secret     string

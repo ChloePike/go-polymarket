@@ -405,14 +405,10 @@ func submissionBody(o polymarket.SignedOrder, orderType polymarket.OrderType, ow
 	}, nil
 }
 
-// owner is the API key an order is attributed to.
-func (c *Client) owner() string {
-	creds := c.session.Credentials()
-	if creds == nil {
-		return ""
-	}
-	return creds.Key
-}
+// owner is the API key an order is attributed to. It comes from whatever
+// authenticates the session, which may be credentials held here or a signing
+// service that holds them elsewhere.
+func (c *Client) owner() string { return c.session.APIKey() }
 
 // CancelResponse reports which cancellations took effect.
 type CancelResponse struct {

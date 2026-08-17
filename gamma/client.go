@@ -47,7 +47,9 @@ var (
 	WithHTTPClient  = polymarket.WithHTTPClient
 	WithSigner      = polymarket.WithSigner
 	WithCredentials = polymarket.WithCredentials
-	WithChainID     = polymarket.WithChainID
-	WithUserAgent   = polymarket.WithUserAgent
-	WithRetries     = polymarket.WithRetries
+	// WithL2Authenticator authenticates without holding the API secret.
+	WithL2Authenticator = polymarket.WithL2Authenticator
+	WithChainID         = polymarket.WithChainID
+	WithUserAgent       = polymarket.WithUserAgent
+	WithRetries         = polymarket.WithRetries
 )
