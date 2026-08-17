@@ -57,6 +57,8 @@ onchain/             transactions sent straight to a node, no Polymarket host
   rpc.go         nonces, fees, calls, estimates, broadcast, receipts
   transaction.go the EIP-1559 transaction, its signature and encoding
   token.go       the ERC-20 and ERC-1155 approvals trading needs
+  ctf.go         split, merge, redeem, convert, and the id derivations
+  wallet.go      what a smart wallet can be read for from a node
 
 ws/                  market, user and live-data streams
 ratelimit.go         the published limits for every host, and the pacing
@@ -276,6 +278,52 @@ Three traps, all pinned:
    equivalent values; a node silently drops the other. `SignTransaction`
    checks rather than trusting the `Signer`.
 
+#### What a smart wallet can and cannot do from here
+
+The deposit wallet looks like it should be drivable on chain — its address is
+derivable, its batch is signed, and the batch encoding is public. It is not,
+and every step of that was checked against Polygon rather than reasoned about:
+
+| Call | Sent by | Answer |
+|---|---|---|
+| `factory.deploy(address[],bytes32[])` | anyone else | reverts `OnlyOperator()` |
+| `factory.proxy(Batch[],bytes[])` | anyone else | reverts `OnlyOperator()` |
+| `wallet.execute(Batch,bytes)` | anyone, any signature | reverts `OnlyFactory()` |
+| `wallet.withdrawERC20(...)` | the owner | reverts `NotPaused()` |
+
+So a deposit wallet is deployed and driven by Polymarket's relayer, and by
+nothing else: `relayer.BuildWalletCreate` and `relayer.BuildWalletBatch` are
+the whole path. What this package adds for one is reading — `Deployed`,
+`WalletNonce`, `WalletOwner`, and `PredictDepositWallet`, which asks the
+factory for the address that `polymarket.DeriveDepositWallet` computes
+offline. Those two agree on Polygon today, for both the beacon era and the
+pre-upgrade one; `examples/onchaincheck` is that comparison, runnable.
+
+The account this package can act for is an EOA, and there the whole surface
+works: approvals, splits, merges, redemptions, conversions.
+
+#### Positions
+
+Minting and burning outcome tokens is the conditional-token framework's, and
+Polymarket's neg-risk adapter wraps it with shorter arguments:
+
+| Operation | Framework | Adapter |
+|---|---|---|
+| mint a complete set | `splitPosition(address,bytes32,bytes32,uint256[],uint256)` | `splitPosition(bytes32,uint256)` |
+| burn a complete set | `mergePositions(address,bytes32,bytes32,uint256[],uint256)` | `mergePositions(bytes32,uint256)` |
+| claim after resolution | `redeemPositions(address,bytes32,bytes32,uint256[])` | `redeemPositions(bytes32,uint256[])` |
+| convert no-positions | — | `convertPositions(bytes32,uint256,uint256)` |
+
+The trailing arrays are the trap: the framework's redemption takes **index
+sets**, the adapter's takes **amounts**. The calls look alike, take the same
+Go types, and mean different things, so passing a partition to the adapter
+redeems one unit and two units rather than everything. Both are pinned, and a
+test asserts they cannot encode alike.
+
+The parent collection id is always zero here. The framework allows a position
+to be split again under a second condition; no Polymarket market does, so the
+field is not a parameter.
+
 Approvals are the reason most callers are here. An account trading with its own
 key must approve every exchange contract twice — the collateral as an ERC-20
 allowance, the outcome tokens as an ERC-1155 operator flag — before settlement
@@ -394,6 +442,8 @@ and no Polymarket client produces one.
 | EIP-1559 transactions: unsigned encoding, signing hash, signature, raw form and hash | 6 |
 | — covering both chains, with and without calldata, with and without a recipient, at both signature parities | |
 | token calldata (approve, allowance, both balances, both approval flags) | 8 |
+| conditional-token and neg-risk calldata, with their id derivations | 15 |
+| nested-tuple encodings (a batch of calls, each carrying bytes) | 3 |
 | RLP items and lists, including the 55/56-byte boundary | 10 |
 
 The relayer and wallet vectors come from a second generator,
@@ -436,7 +486,8 @@ Same inputs, identical bytes. That is the whole correctness story.
 | `relayer/` — 6 reads, 3 transaction builders, submit | done, signing golden-pinned |
 | `ws/` — market, user, live data | done, live-verified |
 | `internal/rlp` — the transaction encoding | done, golden-pinned |
-| `onchain/` — EIP-1559 signing, JSON-RPC, approvals | done, signing golden-pinned; no transaction has been broadcast |
+| `internal/abi` — dynamic arguments, arrays, nested tuples | done, golden-pinned |
+| `onchain/` — EIP-1559 signing, JSON-RPC, approvals, positions | done, golden-pinned and live-verified |
 
 There is no public testnet. The official SDKs support chain 80002 (Amoy) with
 a full set of contract addresses, but no Polymarket-hosted Amoy CLOB exists:
@@ -456,9 +507,13 @@ vector can settle:
    wallet and an explicit decision.
 2. **Response drift.** Field names are transcribed from live responses and the
    SDK's types. An endpoint nobody could observe live is marked as such.
-3. **Live broadcast.** No transaction from `onchain` has been sent to a real
-   node. The bytes match `viem`'s for every vector, and the JSON-RPC calls are
-   tested against a local server, but nothing has been paid for. Sending one
+3. **Live settlement.** `onchain` has been verified against Polygon as far as
+   verification can go without spending: the derivations match the factory's
+   own predictions, the reads answer from the live contracts, and a signed
+   transaction offered to a public node was decoded, its sender recovered, and
+   refused for having no balance — which is the answer that proves the
+   encoding and the signature. What remains unproven is a transaction that
+   actually lands: a split, a merge or an approval mined and settled. That
    needs a funded key and an explicit decision.
 
 ## Clean-room rule

@@ -221,6 +221,110 @@ const calls = [
 	},
 ];
 
+// The conditional-token calls, whose arguments are dynamic where the token
+// approvals' are not: an array of index sets, and the wallet batch's nested
+// tuples. These are the shapes an offset can be computed wrongly in.
+const CONDITION_ID = "0x1763261a2bf8884e1cfce3c83522810db637064a17cf0695846762e9b2600aa1";
+const MARKET_ID = "0x9a2b3c4d5e6f70819a2b3c4d5e6f70819a2b3c4d5e6f70819a2b3c4d5e6f7081";
+const CTF_ABI = viem.parseAbi([
+	"function splitPosition(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] partition, uint256 amount)",
+	"function mergePositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] partition, uint256 amount)",
+	"function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets)",
+	"function getConditionId(address oracle, bytes32 questionId, uint256 outcomeSlotCount)",
+	"function getCollectionId(bytes32 parentCollectionId, bytes32 conditionId, uint256 indexSet)",
+	"function getPositionId(address collateralToken, bytes32 collectionId)",
+	"function payoutDenominator(bytes32 conditionId)",
+]);
+const NEG_RISK_ABI = viem.parseAbi([
+	"function splitPosition(bytes32 conditionId, uint256 amount)",
+	"function mergePositions(bytes32 conditionId, uint256 amount)",
+	"function redeemPositions(bytes32 conditionId, uint256[] amounts)",
+	"function convertPositions(bytes32 marketId, uint256 indexSet, uint256 amount)",
+	"function getConditionId(bytes32 questionId)",
+	"function getPositionId(bytes32 questionId, bool outcome)",
+]);
+const USDC = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
+const ORACLE = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8";
+const BINARY = [1n, 2n];
+
+function ctf(functionName, args) {
+	return viem.encodeFunctionData({ abi: CTF_ABI, functionName, args });
+}
+function negRisk(functionName, args) {
+	return viem.encodeFunctionData({ abi: NEG_RISK_ABI, functionName, args });
+}
+
+const positions = [
+	{ name: "split", signature: "splitPosition(address,bytes32,bytes32,uint256[],uint256)",
+	  data: ctf("splitPosition", [USDC, viem.zeroHash, CONDITION_ID, BINARY, 1000000n]) },
+	{ name: "merge", signature: "mergePositions(address,bytes32,bytes32,uint256[],uint256)",
+	  data: ctf("mergePositions", [USDC, viem.zeroHash, CONDITION_ID, BINARY, 250000n]) },
+	{ name: "redeem", signature: "redeemPositions(address,bytes32,bytes32,uint256[])",
+	  data: ctf("redeemPositions", [USDC, viem.zeroHash, CONDITION_ID, BINARY]) },
+	{ name: "redeem one set", signature: "redeemPositions(address,bytes32,bytes32,uint256[])",
+	  data: ctf("redeemPositions", [USDC, viem.zeroHash, CONDITION_ID, [1n]]) },
+	{ name: "split five outcomes", signature: "splitPosition(address,bytes32,bytes32,uint256[],uint256)",
+	  data: ctf("splitPosition", [USDC, viem.zeroHash, CONDITION_ID, [1n, 2n, 4n, 8n, 16n], 7n]) },
+	{ name: "condition id", signature: "getConditionId(address,bytes32,uint256)",
+	  data: ctf("getConditionId", [ORACLE, CONDITION_ID, 2n]) },
+	{ name: "collection id", signature: "getCollectionId(bytes32,bytes32,uint256)",
+	  data: ctf("getCollectionId", [viem.zeroHash, CONDITION_ID, 1n]) },
+	{ name: "position id", signature: "getPositionId(address,bytes32)",
+	  data: ctf("getPositionId", [USDC, CONDITION_ID]) },
+	{ name: "payout denominator", signature: "payoutDenominator(bytes32)",
+	  data: ctf("payoutDenominator", [CONDITION_ID]) },
+	{ name: "neg-risk split", signature: "splitPosition(bytes32,uint256)",
+	  data: negRisk("splitPosition", [CONDITION_ID, 1000000n]) },
+	{ name: "neg-risk merge", signature: "mergePositions(bytes32,uint256)",
+	  data: negRisk("mergePositions", [CONDITION_ID, 1000000n]) },
+	{ name: "neg-risk redeem", signature: "redeemPositions(bytes32,uint256[])",
+	  data: negRisk("redeemPositions", [CONDITION_ID, [1500000n, 0n]]) },
+	{ name: "neg-risk convert", signature: "convertPositions(bytes32,uint256,uint256)",
+	  data: negRisk("convertPositions", [MARKET_ID, 6n, 2500000n]) },
+	{ name: "neg-risk condition id", signature: "getConditionId(bytes32)",
+	  data: negRisk("getConditionId", [CONDITION_ID]) },
+	{ name: "neg-risk position id", signature: "getPositionId(bytes32,bool)",
+	  data: negRisk("getPositionId", [CONDITION_ID, true]) },
+];
+
+// The deposit wallet's batch, executed by whoever pays for it rather than by
+// the relayer. Its argument is a tuple holding an array of tuples holding
+// bytes, which is every nesting rule the encoder has at once.
+const EXECUTE_ABI = viem.parseAbi([
+	"struct Call { address target; uint256 value; bytes data; }",
+	"struct Batch { address wallet; uint256 nonce; uint256 deadline; Call[] calls; }",
+	"function execute(Batch batch, bytes signature)",
+]);
+const BATCH_WALLET = "0xD71776A8d4FdDeb3c150C4607B3f8bec31213B85";
+const BATCH_SIGNATURE = "0x" + "5c".repeat(64) + "1b";
+const batchCalls = [
+	{ target: USDC, value: "0", data: viem.encodeFunctionData({
+		abi: viem.parseAbi(["function approve(address spender, uint256 value)"]),
+		args: ["0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E", viem.maxUint256] }) },
+	{ target: "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045", value: "7", data: "0x" },
+];
+const batches = [
+	{ name: "two calls", wallet: BATCH_WALLET, nonce: "56340", deadline: "1786958502", calls: batchCalls },
+	{ name: "one call", wallet: BATCH_WALLET, nonce: "0", deadline: "1", calls: [batchCalls[0]] },
+	{ name: "no calls", wallet: BATCH_WALLET, nonce: "18446744073709551616", deadline: "0", calls: [] },
+];
+for (const b of batches) {
+	b.signature = BATCH_SIGNATURE;
+	b.data = viem.encodeFunctionData({
+		abi: EXECUTE_ABI,
+		functionName: "execute",
+		args: [
+			{
+				wallet: b.wallet,
+				nonce: BigInt(b.nonce),
+				deadline: BigInt(b.deadline),
+				calls: b.calls.map((c) => ({ target: c.target, value: BigInt(c.value), data: c.data })),
+			},
+			BATCH_SIGNATURE,
+		],
+	});
+}
+
 // RLP items encoded on their own, so the encoder can be pinned away from a
 // transaction: the empty string, a single small byte, the 55/56-byte boundary
 // where the length prefix changes shape, and nested lists.
@@ -254,6 +358,8 @@ const out = {
 	address: account.address,
 	transactions: signed,
 	calls,
+	positions,
+	batches,
 	rlp,
 	rlpLists,
 };

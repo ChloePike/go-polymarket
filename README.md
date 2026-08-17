@@ -26,7 +26,7 @@ Import only what you use.
 | `go-polymarket/bridge` | deposits and withdrawals across thirteen chains | none |
 | `go-polymarket/relayer` | gasless transactions for a smart wallet | none to key |
 | `go-polymarket/ws` | live market and user streams | none to trade-level |
-| `go-polymarket/onchain` | Polygon directly: approvals, signed transactions, receipts | a key and a node |
+| `go-polymarket/onchain` | Polygon directly: approvals, positions, signed transactions | a key and a node |
 | `go-polymarket` | the wallet, the order types, signing, and the shared session | — |
 
 ## Reading needs nothing
@@ -152,6 +152,18 @@ c := onchain.New(nodeURL)
 missing, err := c.MissingApprovals(ctx, owner, nil)   // reads only, spends nothing
 ```
 
+Splitting, merging and redeeming positions are there too, for both the
+conditional-token framework and the neg-risk adapter — including the pair of
+`redeemPositions` calls that take the same Go types and mean different things,
+one index sets and one amounts.
+
+A smart wallet cannot be driven this way, and that is the contracts' rule
+rather than a gap here: its factory deploys only for a Polymarket operator, and
+the wallet performs a batch only when the factory asks. The package documents
+what each call answers instead, and reads the wallet — deployed, batch nonce,
+owner, and whether the address derived offline is the one the factory would
+deploy.
+
 **Three dependencies, all pure Go.** Keccak-256 from `x/crypto`, secp256k1
 from `decred` — the same library go-ethereum's own pure-Go path wraps — and
 `coder/websocket`. No cgo.
@@ -165,15 +177,20 @@ go run ./examples/portfolio    # what a wallet holds
 go run ./examples/wallets      # which account a key actually controls
 go run ./examples/authcheck    # prove the signing stack against production
 go run ./examples/check-builder <builder-code>
-go run ./examples/approvals -rpc <node-url>   # which approvals an address still owes
+go run ./examples/approvals -rpc <node-url>    # which approvals an address still owes
+go run ./examples/onchaincheck -rpc <node-url> # prove the on-chain layer against a real node
 ```
 
-Every one runs with no arguments and no credentials.
+The first six run with no arguments and no credentials. The last two need a
+Polygon JSON-RPC endpoint, because there is no default node to borrow.
 
 ## Safety
 
-Trading moves real money. Every example here is read-only except `authcheck`,
-which only creates a free API key, and no test touches the live network. Keep
+Trading moves real money. Every example here is read-only except two, and
+neither can spend anything of yours: `authcheck` creates a free API key, and
+`onchaincheck -broadcast` offers a node one transaction signed by a key
+generated seconds earlier that holds nothing — it checks the balance first and
+refuses to send if it is not zero. No test touches the live network. Keep
 your key in the environment, never in a source file.
 
 ## Auditing and institutional signing

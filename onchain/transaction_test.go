@@ -27,6 +27,7 @@ type txVectors struct {
 	Address      string           `json:"address"`
 	Transactions []txVectorCase   `json:"transactions"`
 	Calls        []callVectorCase `json:"calls"`
+	Positions    []callVectorCase `json:"positions"`
 }
 
 // txVectorCase is one transaction, and everything signing it must produce.

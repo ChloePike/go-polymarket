@@ -24,6 +24,27 @@
 // approved contract move that token out of the account for as long as it
 // stands. Approve deliberately takes the amount rather than assuming one.
 //
+// What this package cannot do is drive a deposit wallet. That is a property
+// of the contracts, not an omission here, and it is worth stating plainly
+// because the addresses make it look otherwise:
+//
+//   - The factory deploys a wallet only for a Polymarket operator. Called by
+//     anyone else it reverts OnlyOperator.
+//   - A wallet performs a batch only when the factory asks it to. Called
+//     directly, even by its own owner and with a valid signature, it reverts
+//     OnlyFactory.
+//   - The wallet's own withdrawals are an escape hatch, not an interface:
+//     they revert NotPaused until Polymarket pauses the wallet.
+//
+// So a smart wallet's transactions go through the relayer package and nowhere
+// else, and this package's use for one is reading: whether it is deployed,
+// what its batch nonce is, and whether the address derived offline is the one
+// the factory would deploy.
+//
+// The account this package can act for is an EOA — a key trading in its own
+// name. Its approvals, its splits and merges and redemptions, and any other
+// call it wants to pay for are all here.
+//
 // Only EIP-1559 transactions are built here. Polygon has accepted them since
 // the London fork and a node will price one for you; the legacy form exists in
 // this client only as the absence of code.
