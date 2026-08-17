@@ -15,7 +15,8 @@ vendored. **GPL-3.0-or-later.**
 ## One package per API
 
 Polymarket is six services, so this is six client packages over one shared
-foundation. Import only what you use.
+foundation, plus one that bypasses Polymarket entirely and talks to Polygon.
+Import only what you use.
 
 | Import | What it talks to | Auth |
 |---|---|---|
@@ -25,6 +26,7 @@ foundation. Import only what you use.
 | `go-polymarket/bridge` | deposits and withdrawals across thirteen chains | none |
 | `go-polymarket/relayer` | gasless transactions for a smart wallet | none to key |
 | `go-polymarket/ws` | live market and user streams | none to trade-level |
+| `go-polymarket/onchain` | Polygon directly: approvals, signed transactions, receipts | a key and a node |
 | `go-polymarket` | the wallet, the order types, signing, and the shared session | — |
 
 ## Reading needs nothing
@@ -138,6 +140,18 @@ wallet, err := polymarket.NewWallet(polymarket.SigEIP1271, owner, polymarket.Cha
 opts := wallet.OrderOptions()   // sets both the signature type and the funder
 ```
 
+**Two ways to move money on chain.** Polymarket's relayer pays the gas for a
+smart wallet, and `relayer` signs the three meta-transaction families it takes.
+When there is no relayer in the picture — an EOA trading for itself, or a
+recovery that must not depend on a third party — `onchain` signs an EIP-1559
+transaction and broadcasts it through a node of your choosing. There is no
+default node: an endpoint sees every address you ask about.
+
+```go
+c := onchain.New(nodeURL)
+missing, err := c.MissingApprovals(ctx, owner, nil)   // reads only, spends nothing
+```
+
 **Three dependencies, all pure Go.** Keccak-256 from `x/crypto`, secp256k1
 from `decred` — the same library go-ethereum's own pure-Go path wraps — and
 `coder/websocket`. No cgo.
@@ -151,6 +165,7 @@ go run ./examples/portfolio    # what a wallet holds
 go run ./examples/wallets      # which account a key actually controls
 go run ./examples/authcheck    # prove the signing stack against production
 go run ./examples/check-builder <builder-code>
+go run ./examples/approvals -rpc <node-url>   # which approvals an address still owes
 ```
 
 Every one runs with no arguments and no credentials.

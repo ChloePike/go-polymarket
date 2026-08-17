@@ -27,6 +27,7 @@ polymarket/          the foundation, no endpoints
   internal/eip712/   Keccak-256, typed-data encoding, domain separator
   internal/amount/   exact price/size to maker/taker conversion
   internal/abi/      Solidity ABI encoding, CREATE2
+  internal/rlp/      the transaction encoding, encode only
 
 clob/                the order book and everything that needs a signature
   client.go      Client, New, NewWithSession, the shared options
@@ -50,6 +51,12 @@ relayer/             gasless transactions for a smart wallet
   client.go      Client, its own option type, both credential schemes
   relayer.go     nonces, relay payloads, transactions, deployment state
   transaction.go the Safe, proxy and deposit-wallet meta-transactions
+
+onchain/             transactions sent straight to a node, no Polymarket host
+  client.go      Client, the JSON-RPC plumbing, RPCError
+  rpc.go         nonces, fees, calls, estimates, broadcast, receipts
+  transaction.go the EIP-1559 transaction, its signature and encoding
+  token.go       the ERC-20 and ERC-1155 approvals trading needs
 
 ws/                  market, user and live-data streams
 ratelimit.go         the published limits for every host, and the pacing
@@ -234,6 +241,49 @@ are signed. A proxy needs no second contract: its factory takes an array of
 calls directly, and its operation codes count from one because zero means
 invalid, where a Safe's count from zero.
 
+### Transactions sent directly
+
+The `onchain` package is the other half of the relayer: the same effects, paid
+for by the sender. It talks to an Ethereum JSON-RPC node, which Polymarket does
+not run, so there is no default endpoint — `onchain.New` takes a URL.
+
+Only EIP-1559 (type 2) transactions are built. The signature covers the type
+byte and nine fields, in this order and no other:
+
+```
+keccak256(0x02 ‖ rlp([chainId, nonce, maxPriorityFeePerGas, maxFeePerGas,
+                      gas, to, value, data, accessList]))
+```
+
+The broadcast form appends three more items to the same list —
+`yParity, r, s` — and the transaction hash is keccak-256 over that. The access
+list is always the empty list: it prepays for storage a call will touch, an
+optimisation with no correct default, and it is part of the signature either
+way.
+
+Three traps, all pinned:
+
+1. **`yParity` is not `v`.** Every other signature in this client carries
+   Ethereum's `v` of 27 or 28, because a contract verifying one expects it. A
+   typed transaction stores the parity bit alone, 0 or 1. Passing 27 through
+   encodes a transaction that recovers to a stranger, and a node answers
+   "invalid sender" without naming the cause.
+2. **An empty recipient is the empty string, not the zero address.** RLP
+   writes an integer and an absent value alike, with no leading zeros, so a
+   contract creation and a transfer to `0x00…00` differ by one byte — and
+   value sent to the zero address is gone.
+3. **`s` must be canonical.** EIP-2 admits only the lower of the two
+   equivalent values; a node silently drops the other. `SignTransaction`
+   checks rather than trusting the `Signer`.
+
+Approvals are the reason most callers are here. An account trading with its own
+key must approve every exchange contract twice — the collateral as an ERC-20
+allowance, the outcome tokens as an ERC-1155 operator flag — before settlement
+can move anything. `RequiredApprovals` lists them per chain and
+`MissingApprovals` reads which are outstanding. A smart wallet needs none of
+this: the relayer grants the same approvals as gasless calls made by the wallet
+itself.
+
 ### Level-1 authentication (ClobAuth)
 
 ```
@@ -334,6 +384,18 @@ with a fixed salt, a fixed timestamp and the public Hardhat development key.
 | relayer meta-transactions (Safe single and batched, proxy, deposit batch of 0, 1 and 2 calls) | 6 |
 | relayer calldata (multisend packing, proxy call arrays) | 3 |
 
+A third file, `testdata/tx-vectors.json`, pins the transactions the `onchain`
+package signs. Its generator, `testdata/gen-tx-vectors.mjs`, drives `viem`
+rather than a Polymarket SDK, because a transaction's encoding is Ethereum's
+and no Polymarket client produces one.
+
+| Pinned | Count |
+|---|---|
+| EIP-1559 transactions: unsigned encoding, signing hash, signature, raw form and hash | 6 |
+| — covering both chains, with and without calldata, with and without a recipient, at both signature parities | |
+| token calldata (approve, allowance, both balances, both approval flags) | 8 |
+| RLP items and lists, including the 55/56-byte boundary | 10 |
+
 The relayer and wallet vectors come from a second generator,
 `testdata/gen-relayer-vectors.mjs`, because they are the output of a
 different SDK. The beacon deposit-wallet derivation is pinned against
@@ -373,6 +435,8 @@ Same inputs, identical bytes. That is the whole correctness story.
 | `bridge/` — 5 methods | done, reads live-verified |
 | `relayer/` — 6 reads, 3 transaction builders, submit | done, signing golden-pinned |
 | `ws/` — market, user, live data | done, live-verified |
+| `internal/rlp` — the transaction encoding | done, golden-pinned |
+| `onchain/` — EIP-1559 signing, JSON-RPC, approvals | done, signing golden-pinned; no transaction has been broadcast |
 
 There is no public testnet. The official SDKs support chain 80002 (Amoy) with
 a full set of contract addresses, but no Polymarket-hosted Amoy CLOB exists:
@@ -392,6 +456,10 @@ vector can settle:
    wallet and an explicit decision.
 2. **Response drift.** Field names are transcribed from live responses and the
    SDK's types. An endpoint nobody could observe live is marked as such.
+3. **Live broadcast.** No transaction from `onchain` has been sent to a real
+   node. The bytes match `viem`'s for every vector, and the JSON-RPC calls are
+   tested against a local server, but nothing has been paid for. Sending one
+   needs a funded key and an explicit decision.
 
 ## Clean-room rule
 
