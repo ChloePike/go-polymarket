@@ -5,6 +5,7 @@ package clob
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -680,5 +681,75 @@ func TestIndeterminateOnTransportFailure(t *testing.T) {
 	}
 	if !polymarket.Indeterminate(err) {
 		t.Errorf("a dropped connection was reported as determinate: %v", err)
+	}
+}
+
+// TestAPIKeyNonceIsSigned is the regression test for a nonce that reached the
+// wire but not the signature.
+//
+// The level-1 struct carries the nonce as a signed uint256, so the exchange
+// keys off the SIGNED value and ignores the query string. While the query was
+// the only place the nonce went, asking for any nonce handed back the nonce-0
+// credentials — silently, because every layer looked like it had done its job.
+//
+// Recovering the signature against typed data rebuilt with the requested nonce
+// is what makes this a real test: an implementation that sets POLY_NONCE and
+// the query but signs zero passes every header assertion and fails here.
+func TestAPIKeyNonceIsSigned(t *testing.T) {
+	const nonce = 7
+
+	ts := newTradingServer(t, `{"apiKey":"k","secret":"c2VjcmV0","passphrase":"p"}`)
+	key, err := polymarket.NewPrivateKey(testPrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := New(WithHost(ts.server.URL), WithSigner(key))
+
+	if _, err := c.CreateAPIKey(context.Background(), nonce); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := ts.seen.Headers.Get("POLY_NONCE"); got != "7" {
+		t.Errorf("POLY_NONCE = %q, want 7", got)
+	}
+	if !strings.Contains(ts.seen.RawPath, "nonce=7") {
+		t.Errorf("query = %s, want nonce=7", ts.seen.RawPath)
+	}
+
+	sigHex := strings.TrimPrefix(ts.seen.Headers.Get("POLY_SIGNATURE"), "0x")
+	sig, err := hex.DecodeString(sigHex)
+	if err != nil {
+		t.Fatalf("POLY_SIGNATURE is not hex: %v", err)
+	}
+	td := polymarket.ClobAuthTypedData(key.Address(), polymarket.ChainPolygon,
+		ts.seen.Headers.Get("POLY_TIMESTAMP"), nonce)
+	digest, err := td.Digest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := polymarket.VerifySignature(digest, sig, key.Address()); err != nil {
+		t.Fatalf("the level-1 signature does not cover nonce %d: %v", nonce, err)
+	}
+}
+
+// TestAPIKeyNonceZeroStaysOffTheWire pins the default. Zero is what every
+// wallet's first key is minted under, and the exchange's own clients omit it,
+// so it must not start appearing in the query.
+func TestAPIKeyNonceZeroStaysOffTheWire(t *testing.T) {
+	ts := newTradingServer(t, `{"apiKey":"k","secret":"c2VjcmV0","passphrase":"p"}`)
+	key, err := polymarket.NewPrivateKey(testPrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := New(WithHost(ts.server.URL), WithSigner(key))
+
+	if _, err := c.CreateAPIKey(context.Background(), 0); err != nil {
+		t.Fatal(err)
+	}
+	if got := ts.seen.Headers.Get("POLY_NONCE"); got != "0" {
+		t.Errorf("POLY_NONCE = %q, want 0", got)
+	}
+	if strings.Contains(ts.seen.RawPath, "nonce=") {
+		t.Errorf("query = %s, want no nonce parameter", ts.seen.RawPath)
 	}
 }

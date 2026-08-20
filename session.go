@@ -235,6 +235,18 @@ type Request struct {
 	// a batch costs one per entry, and a cancellation that removes several
 	// orders costs one per order removed.
 	Cost int
+
+	// Nonce selects between the several key pairs one wallet may hold. It
+	// applies to AuthL1 alone — the level-1 struct carries a nonce field and
+	// the level-2 HMAC does not — and zero is the default every wallet's
+	// first key is minted under.
+	//
+	// It has to live on the Request and not only in Query because the nonce
+	// is SIGNED: it is a uint256 field of the level-1 EIP-712 struct, so the
+	// exchange keys off the signed value and ignores what the query says.
+	// Setting one without the other is how a caller silently gets the nonce-0
+	// key back while believing it asked for another.
+	Nonce int64
 }
 
 // Do issues a request and decodes its response.
@@ -253,7 +265,7 @@ func (s *Session) Do(ctx context.Context, r Request) error {
 		}
 	}
 
-	headers, err := s.authHeaders(r.Auth, r.Method, r.Path, string(body))
+	headers, err := s.authHeaders(r.Auth, r.Method, r.Path, string(body), r.Nonce)
 	if err != nil {
 		return err
 	}
@@ -382,7 +394,10 @@ func (s *Session) send(ctx context.Context, req *http.Request, body []byte) (*ht
 }
 
 // authHeaders builds the headers for a request's authentication level.
-func (s *Session) authHeaders(level AuthLevel, method, path, body string) (map[string]string, error) {
+// nonce applies to AuthL1 only. The level-1 struct signs it; the level-2 HMAC
+// has no such field, so a nonce cannot be expressed at that level and is not
+// silently accepted there.
+func (s *Session) authHeaders(level AuthLevel, method, path, body string, nonce int64) (map[string]string, error) {
 	switch level {
 	case AuthNone:
 		return nil, nil
@@ -392,7 +407,7 @@ func (s *Session) authHeaders(level AuthLevel, method, path, body string) (map[s
 			return nil, ErrNoSigner
 		}
 		ts := strconv.FormatInt(time.Now().Unix(), 10)
-		h, err := BuildL1Headers(s.signer, s.chainID, ts, 0)
+		h, err := BuildL1Headers(s.signer, s.chainID, ts, nonce)
 		if err != nil {
 			return nil, err
 		}

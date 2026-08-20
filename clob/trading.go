@@ -75,8 +75,14 @@ func (c *Client) apiKeyRequest(ctx context.Context, method, path string, nonce i
 		Method: method,
 		Path:   path,
 		Query:  nonceQuery(nonce),
-		Auth:   polymarket.AuthL1,
-		Out:    &creds,
+		// The nonce has to travel BOTH ways. The query is what the endpoint
+		// reads, and the signature is what proves the request is for that
+		// nonce — the level-1 struct carries the nonce as a signed uint256.
+		// Sending it only as a query parameter is how this call used to hand
+		// back the nonce-0 credentials for every nonce asked for.
+		Nonce: nonce,
+		Auth:  polymarket.AuthL1,
+		Out:   &creds,
 	}); err != nil {
 		return polymarket.APICreds{}, err
 	}
