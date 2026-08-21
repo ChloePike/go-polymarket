@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -139,5 +140,61 @@ func TestNewSIWEMessageFillsTheConstants(t *testing.T) {
 func TestSIWETokenRejectsAMalformedSignature(t *testing.T) {
 	if _, err := siweTestMessage().Token(make([]byte, 64)); err == nil {
 		t.Error("a 64-byte signature was accepted")
+	}
+}
+
+// personalOnlySigner is a key that will not sign a bare digest, the way a
+// custodial signing service will not.
+type personalOnlySigner struct {
+	inner   Signer
+	message []byte
+	digests int
+}
+
+func (p *personalOnlySigner) Address() string { return p.inner.Address() }
+
+func (p *personalOnlySigner) SignDigest(d [32]byte) ([]byte, error) {
+	p.digests++
+	return nil, fmt.Errorf("this signer refuses unframed digests")
+}
+
+func (p *personalOnlySigner) SignPersonal(message []byte) ([]byte, error) {
+	p.message = append([]byte(nil), message...)
+	return p.inner.SignDigest(PersonalDigest(message))
+}
+
+// TestSignSIWEPrefersThePersonalPath is why PersonalSigner exists.
+//
+// A signer that only signs framed messages must be able to log in, and the
+// token it produces has to be byte-for-byte what a digest signer would have
+// produced — the framing moves across the boundary, the signed bytes do not
+// change. If SignSIWE ever reaches for SignDigest first, a custodial signer
+// fails at login with an error that looks like a credential problem.
+func TestSignSIWEPrefersThePersonalPath(t *testing.T) {
+	key, err := NewPrivateKey(siweTestKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := siweTestMessage()
+	msg.Address = key.Address()
+
+	want, err := SignSIWE(key, msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	custodial := &personalOnlySigner{inner: key}
+	got, err := SignSIWE(custodial, msg)
+	if err != nil {
+		t.Fatalf("a personal-only signer could not sign in: %v", err)
+	}
+	if custodial.digests != 0 {
+		t.Errorf("SignDigest was called %d times; the personal path must be preferred", custodial.digests)
+	}
+	if string(custodial.message) != msg.String() {
+		t.Errorf("signed the wrong bytes:\n got %q\nwant %q", custodial.message, msg.String())
+	}
+	if got != want {
+		t.Errorf("token differs from the digest path:\n got %s\nwant %s", got, want)
 	}
 }

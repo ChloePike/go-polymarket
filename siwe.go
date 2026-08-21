@@ -151,12 +151,44 @@ func (m SIWEMessage) Token(signature []byte) (string, error) {
 	return base64.StdEncoding.EncodeToString([]byte(plain)), nil
 }
 
+// A PersonalSigner is a Signer that wants the message text rather than its
+// digest.
+//
+// Implement it when the key lives behind a service that will not sign a bare
+// 32 bytes — which is the safe posture, not a limitation to work around. An
+// unframed signature is valid for whatever else that digest might have been,
+// so a custodial signer that refuses one is refusing to let a login double as
+// a transaction. Signing the text lets it apply the EIP-191 framing itself and
+// see what it is authorising.
+//
+// The signature must cover PersonalDigest(message) and come back as the same
+// 65 bytes SignDigest returns.
+type PersonalSigner interface {
+	Signer
+
+	// SignPersonal signs message as an EIP-191 personal message.
+	SignPersonal(message []byte) ([]byte, error)
+}
+
 // SignSIWE signs a message with a signer and returns its bearer token.
+//
+// A PersonalSigner is given the text; anything else is given the digest. The
+// two produce the same signature — PersonalDigest is exactly the step being
+// moved across the boundary — so which path runs is a property of where the
+// key lives and never of what gets signed.
 func SignSIWE(s Signer, m SIWEMessage) (string, error) {
 	if s == nil {
 		return "", fmt.Errorf("polymarket: siwe login needs a signer")
 	}
-	sig, err := s.SignDigest(m.Digest())
+	var (
+		sig []byte
+		err error
+	)
+	if ps, ok := s.(PersonalSigner); ok {
+		sig, err = ps.SignPersonal([]byte(m.String()))
+	} else {
+		sig, err = s.SignDigest(m.Digest())
+	}
 	if err != nil {
 		return "", fmt.Errorf("polymarket: signing siwe message: %w", err)
 	}
