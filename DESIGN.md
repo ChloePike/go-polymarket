@@ -390,6 +390,43 @@ sends the secret itself in its subscribe frame — a protocol fact, not an
 omission here — so there is nothing for an authenticator to protect on that
 socket.
 
+### Builder API keys
+
+Three endpoints on the CLOB, all at `/auth/builder-api-key`, and the three do
+not share an authentication scheme:
+
+| call | method | auth | returns |
+|---|---|---|---|
+| create | POST | level 2 (the account) | `{key, secret, passphrase}` |
+| list | GET | level 2 (the account) | `[{key, createdAt, revokedAt?}]` |
+| revoke | DELETE | the builder key's own HMAC | `"OK"` |
+
+**Trap — the revoke authenticates as the credential, not the account.** Four
+ways were tried against production and one works: the `POLY_BUILDER_` headers
+alone. The account's level-2 headers are a 401 here; the builder credential
+under the plain `POLY_` names is a 401; and sending both families together is
+also a 401. The schemes do not compose, so the revoke must travel with no
+level-2 headers at all. The consequence for the API is that the key to revoke
+is an argument: a caller who no longer holds the secret cannot revoke it.
+
+The HMAC itself is the level-2 construction unchanged — timestamp in unix
+seconds, then method, then bare path, then body, keyed by the base64url secret
+— under the other header names, exactly as the relayer's builder scheme.
+
+**Trap — "key", not "apiKey".** These endpoints spell the identifier `key`.
+The level-1 handshake spells it `apiKey`, and decoding one shape with the
+other's name yields a credential whose Key is empty and which authenticates as
+nobody.
+
+**Trap — the listing is narrower than the credential.** It returns no secret
+and no passphrase; those are disclosed exactly once, by the create. So the
+listing has its own type, and a listed entry cannot be handed back to the
+revoke. A revoked key also stays in the listing with `revokedAt` set, so
+presence in the list is not proof a credential still works.
+
+Verified against production on 2026-08-21 with a throwaway key and its own
+freshly minted level-2 credentials.
+
 ### Amount math
 
 Rounding limits come from the market tick size:

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"time"
 
 	polymarket "github.com/ChloePike/go-polymarket"
 )
@@ -165,31 +166,121 @@ func (c *Client) DeleteReadonlyAPIKey(ctx context.Context, key string) error {
 	})
 }
 
-// BuilderAPIKey is the credential a builder uses to read its attribution.
+// Builder credential header names. The builder scheme is deliberately not the
+// level-2 scheme under other names: sending both families on one request is
+// refused, so these never travel beside POLY_SIGNATURE.
+const (
+	headerBuilderAPIKey     = "POLY_BUILDER_API_KEY"
+	headerBuilderPassphrase = "POLY_BUILDER_PASSPHRASE"
+	headerBuilderSignature  = "POLY_BUILDER_SIGNATURE"
+	headerBuilderTimestamp  = "POLY_BUILDER_TIMESTAMP"
+)
+
+// A BuilderAPIKey is the credential a builder authenticates with. All three
+// fields are secrets, and the secret and passphrase are returned exactly once,
+// by CreateBuilderAPIKey — BuilderAPIKeys cannot give them back. Store the
+// whole value or lose the ability to revoke it. Never log a BuilderAPIKey.
 type BuilderAPIKey struct {
-	Key         string `json:"apiKey"`
-	Secret      string `json:"secret"`
-	Passphrase  string `json:"passphrase"`
-	BuilderCode string `json:"builderCode"`
+	// Key identifies the credential, a UUID. The wire name is "key", not
+	// "apiKey": the builder endpoints do not share the level-1 spelling.
+	Key string `json:"key"`
+	// Secret keys the HMAC, base64url.
+	Secret string `json:"secret"`
+	// Passphrase is sent in the clear beside the signature and is not part
+	// of the signed message.
+	Passphrase string `json:"passphrase"`
 }
 
-// CreateBuilderAPIKey issues a builder credential for the account. Level 2.
+// A BuilderAPIKeyInfo is one builder credential as BuilderAPIKeys reports it.
+// It is deliberately narrower than BuilderAPIKey: the listing returns no
+// secret and no passphrase, so decoding it into the credential type yields a
+// value that looks usable and authenticates as nobody.
+type BuilderAPIKeyInfo struct {
+	// Key identifies the credential.
+	Key string `json:"key"`
+	// CreatedAt is when it was issued, RFC 3339 with microseconds.
+	CreatedAt string `json:"createdAt"`
+	// RevokedAt is when it was revoked, in the same format, and is absent
+	// while the key is live. A revoked key stays in the listing, so presence
+	// in the list is not proof a credential still works — check this field.
+	RevokedAt string `json:"revokedAt,omitempty"`
+}
+
+// Revoked reports whether the credential has been revoked.
+func (i BuilderAPIKeyInfo) Revoked() bool { return i.RevokedAt != "" }
+
+// CreateBuilderAPIKey issues a builder credential for the account.
+//
+// The response is the only time the secret and passphrase are disclosed. Keep
+// the returned value: RevokeBuilderAPIKey needs it, and no endpoint can
+// recover it. Level 2.
+//
+// POST /auth/builder-api-key
 func (c *Client) CreateBuilderAPIKey(ctx context.Context) (BuilderAPIKey, error) {
 	var out BuilderAPIKey
 	err := c.session.PostL2(ctx, epCreateBuilderKey, nil, &out)
 	return out, err
 }
 
-// BuilderAPIKeys lists the account's builder credentials. Level 2.
-func (c *Client) BuilderAPIKeys(ctx context.Context) ([]BuilderAPIKey, error) {
-	var out []BuilderAPIKey
+// BuilderAPIKeys lists the account's builder credentials, revoked ones
+// included. Level 2.
+//
+// GET /auth/builder-api-key
+func (c *Client) BuilderAPIKeys(ctx context.Context) ([]BuilderAPIKeyInfo, error) {
+	var out []BuilderAPIKeyInfo
 	err := c.session.GetL2(ctx, epGetBuilderKeys, nil, &out)
 	return out, err
 }
 
-// RevokeBuilderAPIKey revokes the account's builder credential. Level 2.
-func (c *Client) RevokeBuilderAPIKey(ctx context.Context) error {
-	return c.session.DeleteL2(ctx, epRevokeBuilderKey, nil, nil)
+// RevokeBuilderAPIKey revokes one builder credential.
+//
+// It authenticates as the CREDENTIAL, not as the account: the request carries
+// the builder key's own HMAC under the POLY_BUILDER_ header names, and the
+// account's level-2 headers are refused here. That is why the key to revoke is
+// an argument rather than implied by the client — a caller who no longer holds
+// the secret cannot revoke it, from here or anywhere.
+//
+// Three ways to authenticate this call were tried against production and only
+// one works: POLY_BUILDER_ headers alone. The account's level-2 headers are a
+// 401, the builder credential under the plain POLY_ names is a 401, and — the
+// surprising one — sending both families together is also a 401. The schemes
+// do not compose, so this request is issued unauthenticated at the session
+// level and carries its own headers.
+//
+// DELETE /auth/builder-api-key
+func (c *Client) RevokeBuilderAPIKey(ctx context.Context, key BuilderAPIKey) error {
+	headers, err := builderHeaders(key, http.MethodDelete, epRevokeBuilderKey, "")
+	if err != nil {
+		return err
+	}
+	return c.session.Do(ctx, polymarket.Request{
+		Method:  http.MethodDelete,
+		Path:    epRevokeBuilderKey,
+		Headers: headers,
+	})
+}
+
+// builderHeaders signs one request with a builder credential.
+//
+// The construction is the level-2 HMAC exactly — timestamp in unix seconds,
+// then method, then the bare path, then the body, keyed by the base64url
+// secret — under the POLY_BUILDER_ names. The path excludes the query string,
+// and the passphrase never enters the HMAC.
+func builderHeaders(key BuilderAPIKey, method, requestPath, body string) (map[string]string, error) {
+	if key.Key == "" || key.Secret == "" || key.Passphrase == "" {
+		return nil, fmt.Errorf("clob: a builder credential needs a key, a secret and a passphrase")
+	}
+	ts := strconv.FormatInt(time.Now().Unix(), 10)
+	sig, err := polymarket.SignHMAC(key.Secret, ts, method, requestPath, body)
+	if err != nil {
+		return nil, fmt.Errorf("clob: signing builder request: %w", err)
+	}
+	return map[string]string{
+		headerBuilderAPIKey:     key.Key,
+		headerBuilderPassphrase: key.Passphrase,
+		headerBuilderSignature:  sig,
+		headerBuilderTimestamp:  ts,
+	}, nil
 }
 
 // CreateOrder resolves a UserOrder into a signed order, ready for PostOrder.
