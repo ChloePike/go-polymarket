@@ -21,7 +21,7 @@ Import only what you use.
 | Import | What it talks to | Auth |
 |---|---|---|
 | `go-polymarket/clob` | the order book: markets, prices, orders, trades, rewards | none to trade-level |
-| `go-polymarket/gamma` | market and event metadata: titles, slugs, tags, resolution | none |
+| `go-polymarket/gamma` | market and event metadata: titles, slugs, tags, resolution | none, plus a sign-in |
 | `go-polymarket/data` | portfolio and analytics: positions, activity, holders | none |
 | `go-polymarket/bridge` | deposits and withdrawals across thirteen chains | none |
 | `go-polymarket/relayer` | gasless transactions for a smart wallet | none to key |
@@ -139,6 +139,27 @@ and is nested the opposite way round from what the ERC's own text describes.
 wallet, err := polymarket.NewWallet(polymarket.SigEIP1271, owner, polymarket.ChainPolygon)
 opts := wallet.OrderOptions()   // sets both the signature type and the funder
 ```
+
+**A relayer credential from nothing but a wallet.** Every authenticated relayer
+call takes a key, and listing keys takes a key too — so the credential has to
+come from somewhere. It comes from signing in with Ethereum: `gamma` exchanges
+a wallet signature for a session cookie, and the relayer mints a key against
+that session. One jar carries the login between the two hosts.
+
+```go
+jar, _ := polymarket.NewCookieJar()
+
+g := gamma.New(gamma.WithSigner(key), gamma.WithCookieJar(jar))
+if _, err := g.Login(ctx); err != nil { ... }
+
+r := relayer.New(relayer.WithCookieJar(jar))
+minted, err := r.MintAPIKey(ctx)      // {apiKey, address, createdAt}
+
+r = relayer.New(relayer.WithAPIKey(minted.Credentials()))
+```
+
+This is the only cookie-carrying flow in the library, and a session stores
+cookies only when `WithCookieJar` asks it to — so nothing else accumulates one.
 
 **Two ways to move money on chain.** Polymarket's relayer pays the gas for a
 smart wallet, and `relayer` signs the three meta-transaction families it takes.

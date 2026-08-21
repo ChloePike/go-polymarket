@@ -47,14 +47,15 @@ package relayer
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/url"
 
 	polymarket "github.com/ChloePike/go-polymarket"
 )
 
-// Relayer paths. Every one is a bare path on RelayerHost; the API keys
-// endpoint is the only one not at the root.
+// Relayer paths. Every one is a bare path on RelayerHost; the two API key
+// endpoints are the only ones not at the root.
 const (
 	epNonce        = "/nonce"
 	epRelayPayload = "/relay-payload"
@@ -62,6 +63,7 @@ const (
 	epTransactions = "/transactions"
 	epDeployed     = "/deployed"
 	epAPIKeys      = "/relayer/api/keys"
+	epMintAPIKey   = "/relayer/api/auth"
 )
 
 // A WalletType names which of a user's wallets a call is about. Polymarket
@@ -321,9 +323,11 @@ func (c *Client) Transactions(ctx context.Context) ([]Transaction, error) {
 // 403 where a bad credential is a 401, though the relayer has been seen to
 // answer 401 for both, so neither status identifies which went wrong.
 //
-// This endpoint cannot bootstrap itself. A key is needed to list keys, and a
-// key can only be created under Polymarket's own account authentication, so a
-// caller holding nothing but a wallet cannot reach it.
+// This endpoint cannot bootstrap itself: a key is needed to list keys. Keys are
+// minted at POST /relayer/api/auth, which authenticates with a Gamma session
+// cookie obtained by signing in with Ethereum. That flow is described in
+// DESIGN.md and is not implemented here, so a caller holding nothing but a
+// wallet cannot yet reach this endpoint from this package.
 //
 // GET /relayer/api/keys
 func (c *Client) APIKeys(ctx context.Context) ([]APIKey, error) {
@@ -342,6 +346,44 @@ func (c *Client) APIKeys(ctx context.Context) ([]APIKey, error) {
 	}
 	return out, nil
 }
+
+// MintAPIKey issues a new relayer API key for the signed-in account.
+//
+// This is the one call here that authenticates with a session cookie rather
+// than with headers, and it is what bootstraps the credentials every other
+// authenticated relayer call needs. The cookie comes from Gamma's
+// sign-in-with-Ethereum handshake, so the sequence is:
+//
+//	jar, err := polymarket.NewCookieJar()
+//	g := gamma.New(gamma.WithSigner(key), gamma.WithCookieJar(jar))
+//	if _, err := g.Login(ctx); err != nil { ... }
+//	r := relayer.New(relayer.WithCookieJar(jar))
+//	key, err := r.MintAPIKey(ctx)
+//
+// One jar serves both clients because Polymarket scopes the session cookie to
+// polymarket.com, which covers the Gamma and relayer hosts alike.
+//
+// The key it returns is the same shape APIKeys lists, so it goes straight into
+// WithAPIKey. Key is secret material: never log it.
+//
+// POST /relayer/api/auth
+func (c *Client) MintAPIKey(ctx context.Context) (APIKey, error) {
+	var out APIKey
+	if c.session.CookieJar() == nil {
+		return out, errNoJar
+	}
+	err := c.session.Do(ctx, polymarket.Request{
+		Method: http.MethodPost,
+		Path:   epMintAPIKey,
+		Out:    &out,
+	})
+	return out, err
+}
+
+// errNoJar is what MintAPIKey answers without a cookie jar. Without one the
+// session cookie is never stored, and the mint would fail as an unauthorized
+// caller rather than as a misconfigured client.
+var errNoJar = errors.New("relayer: minting an API key needs a cookie jar: build the client with WithCookieJar, sharing the jar that signed in")
 
 // walletQuery builds the address-and-type query the nonce and relay-payload
 // endpoints share. Both parameters are required there, so an empty wallet

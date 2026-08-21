@@ -3,8 +3,11 @@
 
 // Package gamma is a client for Polymarket's Gamma metadata API (GammaHost).
 // Gamma is the metadata behind a Polymarket page — titles, slugs, tags,
-// resolution state — and nothing here needs authentication: every endpoint
-// this package wraps is a public, unauthenticated request.
+// resolution state — and almost nothing here needs authentication: every
+// endpoint this package wraps is a public, unauthenticated request but one.
+// The exception is the sign-in-with-Ethereum pair in auth.go, which exchanges
+// a wallet signature for a session cookie. It exists to reach a single
+// endpoint on another host: minting a relayer API key.
 //
 // Every field that carries money, a price or a size decodes as
 // [encoding/json.Number], which keeps the exact decimal text the server
@@ -49,7 +52,11 @@ var (
 	WithCredentials = polymarket.WithCredentials
 	// WithL2Authenticator authenticates without holding the API secret.
 	WithL2Authenticator = polymarket.WithL2Authenticator
-	WithChainID         = polymarket.WithChainID
-	WithUserAgent       = polymarket.WithUserAgent
-	WithRetries         = polymarket.WithRetries
+	// WithCookieJar stores the session cookie the sign-in handshake sets.
+	WithCookieJar = polymarket.WithCookieJar
+	// NewCookieJar builds a jar for WithCookieJar.
+	NewCookieJar  = polymarket.NewCookieJar
+	WithChainID   = polymarket.WithChainID
+	WithUserAgent = polymarket.WithUserAgent
+	WithRetries   = polymarket.WithRetries
 )

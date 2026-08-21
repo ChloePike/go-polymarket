@@ -140,6 +140,12 @@ func WithL2Authenticator(a polymarket.L2Authenticator) Option {
 
 // WithChainID selects the chain whose exchange contracts orders are signed
 // against. The default is ChainPolygon.
+// WithCookieJar gives the client a cookie jar. MintAPIKey needs one, and it
+// must be the same jar the Gamma sign-in used.
+func WithCookieJar(jar http.CookieJar) Option {
+	return sessionOption{opt: polymarket.WithCookieJar(jar)}
+}
+
 func WithChainID(chainID int64) Option { return sessionOption{opt: polymarket.WithChainID(chainID)} }
 
 // WithUserAgent sets the User-Agent header. Identify your application here;

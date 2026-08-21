@@ -390,6 +390,66 @@ sends the secret itself in its subscribe frame — a protocol fact, not an
 omission here — so there is nothing for an authenticator to protect on that
 socket.
 
+### SIWE session authentication (Gamma)
+
+A third scheme sits beside the two above. It authenticates *the account* rather
+than a request, it is the only one here that carries a cookie, and exactly one
+endpoint needs it: minting a relayer API key.
+
+```
+1. GET  {gamma}/nonce
+   -> {"nonce": "..."} and Set-Cookie: polymarketnonce
+
+2. message = the EIP-4361 text, built from those fields:
+     domain    = "polymarket.com"
+     uri       = "https://polymarket.com"
+     statement = "Welcome to Polymarket! Sign to connect."
+     version   = "1", chainId = 137
+     nonce, issuedAt, expirationTime
+
+3. signature = personal_sign(message)            // EIP-191, r || s || v
+
+4. token = base64( json(fields) || ":::" || "0x" || hex(signature) )
+   GET {gamma}/login
+     Authorization: Bearer <token>
+     Cookie:        polymarketnonce=...
+   -> 200 {"type":"metamask","address":"0x..."}
+      Set-Cookie: polymarketsession, polymarketauthtype
+
+5. POST {relayer}/relayer/api/auth
+     Cookie: polymarketsession=...
+   -> 200 {apiKey, address, createdAt, updatedAt}
+```
+
+Step 5 is the `MintV2APIKey` the relayer documents. Its response is exactly
+`relayer.APIKey`, the shape `GET /relayer/api/keys` already returns, so the
+minted pair goes straight into `WithAPIKey` and needs no new type.
+
+**Trap — the separator is inside the base64.** The token is one base64 blob
+whose *plaintext* is `json ::: signature`, not a base64 blob joined to a
+signature by `:::`. Both spellings look equally plausible and only one
+authenticates; the other is a 401 `invalid login`, the same answer a bad
+signature gets, so the status does not say which half is wrong. Seven layouts
+were tried against production and one worked.
+
+**Trap — the nonce is bound to a cookie.** `/nonce` returns a nonce *and* sets
+`polymarketnonce`. The login rejects a nonce presented without the cookie it
+came with, so the two calls must share a jar. The jar also carries the login
+across hosts on its own: the cookies are scoped to `Domain=polymarket.com`, so
+one jar shared between the Gamma and relayer hosts hands step 5 its session
+with nothing copied by hand.
+
+**Trap — `/login` is a GET.** It takes no body; everything travels in the
+`Authorization` header. A POST is a 405.
+
+Verified end to end against production on 2026-08-21 with a freshly generated
+throwaway key — every fact above is first-hand, none of it transcribed. The
+library walks the same path: `gamma.Client.Login` does steps 1 to 4 and
+`relayer.Client.MintAPIKey` does step 5, sharing one `polymarket.NewCookieJar`.
+Both refuse locally without a jar, because a session with no jar completes
+every request and silently drops the cookie, leaving the failure to surface
+much later as an unauthorized mint.
+
 ### Builder API keys
 
 Three endpoints on the CLOB, all at `/auth/builder-api-key`, and the three do
@@ -530,16 +590,17 @@ Same inputs, identical bytes. That is the whole correctness story.
 | `signer.go` — keys, addresses, EIP-55 | done, golden-pinned |
 | `typeddata.go` — the EIP-712 payload, `TypedDataSigner` | done, cross-checked against viem |
 | `auth.go` — level 1 and level 2 | done, verified against production |
+| `siwe.go` — the EIP-4361 message and its bearer token | done, verified against production |
 | `order.go` — build and sign, V1/V2/V3, limit and market | done, golden-pinned |
 | `wallet.go` — the four account forms and their derivations | done, pinned against two official clients |
 | `erc7739.go` — the wrapped order signature | done, golden-pinned |
-| `session.go` — transport, retries, headers, errors | done |
+| `session.go` — transport, retries, headers, errors, cookie jar | done |
 | `ratelimit.go` — both published limiters | done |
 | `clob/` — 69 methods | done |
-| `gamma/` — 49 methods | done |
+| `gamma/` — 49 methods, plus the sign-in pair | done, login live-verified |
 | `data/` — 15 methods | done |
 | `bridge/` — 5 methods | done, reads live-verified |
-| `relayer/` — 6 reads, 3 transaction builders, submit | done, signing golden-pinned |
+| `relayer/` — 7 reads, 3 transaction builders, submit | done, signing golden-pinned, mint live-verified |
 | `ws/` — market, user, live data | done, live-verified |
 | `internal/rlp` — the transaction encoding | done, golden-pinned |
 | `internal/abi` — dynamic arguments, arrays, nested tuples | done, golden-pinned |

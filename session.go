@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"strconv"
 	"strings"
@@ -34,6 +35,7 @@ type Session struct {
 	chainID    int64
 	userAgent  string
 	retries    int
+	jar        http.CookieJar
 
 	limiter     Limiter
 	limiterSet  bool
@@ -82,6 +84,30 @@ func WithCredentials(creds APICreds) Option {
 // attribution — reads it from the authenticator.
 func WithL2Authenticator(a L2Authenticator) Option {
 	return func(s *Session) { s.l2 = a }
+}
+
+// WithCookieJar gives the session a cookie jar.
+//
+// Only one flow here uses cookies: the sign-in-with-Ethereum handshake that
+// mints a relayer API key. Sessions have no jar by default, so nothing stores
+// a cookie unless a caller asks for it.
+//
+// The jar is applied by the session itself rather than by the http.Client, so
+// supplying one does not disturb a client passed to WithHTTPClient. Sharing
+// one jar between a Gamma session and a relayer session is what carries a
+// login from one host to the other: Polymarket scopes the session cookie to
+// polymarket.com, so the jar hands it to both.
+func WithCookieJar(jar http.CookieJar) Option {
+	return func(s *Session) { s.jar = jar }
+}
+
+// NewCookieJar returns a jar suitable for WithCookieJar.
+func NewCookieJar() (http.CookieJar, error) {
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return nil, fmt.Errorf("polymarket: creating cookie jar: %w", err)
+	}
+	return jar, nil
 }
 
 // WithChainID selects the chain whose exchange contracts orders are signed
@@ -146,6 +172,10 @@ func NewSession(host string, opts ...Option) *Session {
 	}
 	return s
 }
+
+// CookieJar reports the session's cookie jar, or nil when it has none. Pass
+// it to another session's WithCookieJar to share one login between hosts.
+func (s *Session) CookieJar() http.CookieJar { return s.jar }
 
 // Limiter reports the limiter pacing this session, or nil when pacing is off.
 func (s *Session) Limiter() Limiter { return s.limiter }
@@ -297,6 +327,12 @@ func (s *Session) Do(ctx context.Context, r Request) error {
 		req.Header.Set(k, v)
 	}
 
+	if s.jar != nil {
+		for _, c := range s.jar.Cookies(req.URL) {
+			req.AddCookie(c)
+		}
+	}
+
 	if s.limiter != nil {
 		if err := s.limiter.Wait(ctx, r); err != nil {
 			return fmt.Errorf("polymarket: %s %s: %w: %w", r.Method, r.Path, err, ErrNotSent)
@@ -308,6 +344,10 @@ func (s *Session) Do(ctx context.Context, r Request) error {
 		return fmt.Errorf("polymarket: %s %s: %w", r.Method, r.Path, err)
 	}
 	defer resp.Body.Close()
+
+	if s.jar != nil {
+		s.jar.SetCookies(req.URL, resp.Cookies())
+	}
 
 	if s.limiter != nil {
 		s.limiter.Observe(r, resp.StatusCode, resp.Header)
