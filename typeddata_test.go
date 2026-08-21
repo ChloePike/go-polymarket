@@ -44,23 +44,25 @@ func TestOrderTypedDataDigest(t *testing.T) {
 // goldenToOrder rebuilds an Order and its options from a golden vector.
 func goldenToOrder(t *testing.T, g goldenOrder) (Order, OrderOptions) {
 	t.Helper()
-	return Order{
-			Salt:          g.Order.Salt,
-			Maker:         g.Order.Maker,
-			Signer:        g.Order.Signer,
-			TokenID:       g.Order.TokenID,
-			MakerAmount:   g.Order.MakerAmount,
-			TakerAmount:   g.Order.TakerAmount,
-			Side:          Side(g.Order.Side),
-			SignatureType: SignatureType(g.Order.SignatureType),
-			Timestamp:     g.Order.Timestamp,
-			Metadata:      g.Order.Metadata,
-			Builder:       g.Order.Builder,
-		}, OrderOptions{
-			TickSize: g.Input.TickSize,
-			NegRisk:  g.Input.NegRisk,
-			Version:  g.Input.Version,
-		}
+	order := Order{
+		Salt:          g.Order.Salt,
+		Maker:         g.Order.Maker,
+		Signer:        g.Order.Signer,
+		TokenID:       g.Order.TokenID,
+		MakerAmount:   g.Order.MakerAmount,
+		TakerAmount:   g.Order.TakerAmount,
+		Side:          Side(g.Order.Side),
+		SignatureType: SignatureType(g.Order.SignatureType),
+		Timestamp:     g.Order.Timestamp,
+		Metadata:      g.Order.Metadata,
+		Builder:       g.Order.Builder,
+	}
+	opts := OrderOptions{
+		TickSize: g.Input.TickSize,
+		NegRisk:  g.Input.NegRisk,
+		Version:  g.Input.Version,
+	}
+	return order, opts
 }
 
 // TestTypedDataSurvivesJSON is the property the audit use case rests on: the
